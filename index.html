@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ติดตามงานตัดกล่องตัวอย่าง</title>
+
+<meta name="theme-color" content="#ffffff">
+<meta name="description" content="ระบบติดตามสถานะงานตัดกล่องตัวอย่าง">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png" type="image/png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="งานตัดกล่อง">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@400;500;600;700&family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ================= หน้า Login ================= -->
+<section id="loginView" class="login-wrap">
+  <form id="loginForm" class="login-card">
+    <svg class="login-logo" viewBox="0 0 48 48" fill="none" stroke="#1a73e8" stroke-width="2.2"
+         stroke-linejoin="round" stroke-linecap="round" aria-hidden="true">
+      <path d="M24 6 41 14v20L24 42 7 34V14L24 6Z"/>
+      <path d="M7 14l17 8 17-8M24 22v20"/>
+    </svg>
+    <h1>งานตัดกล่องตัวอย่าง</h1>
+    <p class="login-sub">กรุณาเข้าสู่ระบบเพื่อดูข้อมูล</p>
+
+    <label class="stack"><span>ชื่อผู้ใช้</span>
+      <input type="text" id="username" autocomplete="username" autocapitalize="none" required></label>
+
+    <label class="stack"><span>รหัสผ่าน</span>
+      <input type="password" id="password" autocomplete="current-password" required></label>
+
+    <div id="loginError" class="alert hidden"></div>
+    <button type="submit" class="btn btn-primary btn-block" id="loginBtn">เข้าสู่ระบบ</button>
+  </form>
+</section>
+
+<!-- ================= หน้าหลัก ================= -->
+<div id="appView" class="shell hidden">
+
+  <!-- แถบไอคอนซ้าย (เดสก์ท็อป) -->
+  <aside class="sidebar">
+    <svg class="side-logo" viewBox="0 0 48 48" fill="none" stroke="#111418" stroke-width="2.2"
+         stroke-linejoin="round" stroke-linecap="round" aria-hidden="true">
+      <path d="M24 6 41 14v20L24 42 7 34V14L24 6Z"/>
+      <path d="M7 14l17 8 17-8M24 22v20"/>
+    </svg>
+
+    <nav class="side-nav">
+      <button class="side-item active" data-view="jobs">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect x="3" y="4" width="18" height="16" rx="2.5"/>
+          <path d="M8 9h9M8 13h9M8 17h5"/>
+        </svg>
+        <span>รายการงาน</span>
+      </button>
+      <button class="side-item" data-view="summary">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>
+        </svg>
+        <span>สรุปวันนี้</span>
+      </button>
+    </nav>
+  </aside>
+
+  <div class="main">
+    <header class="page-head">
+      <h1 id="pageTitle">รายการงาน</h1>
+      <div class="head-right">
+        <span class="who"><b id="userName"></b><span id="userRole"></span></span>
+        <button class="link-btn" id="refreshBtn">รีเฟรช</button>
+        <button class="link-btn" id="changePwBtn">เปลี่ยนรหัสผ่าน</button>
+        <button class="link-btn" id="logoutBtn">ออกจากระบบ</button>
+      </div>
+    </header>
+
+    <main class="content">
+
+      <!-- ---------- รายการงาน ---------- -->
+      <div id="jobsView">
+        <div class="stats" id="stats"></div>
+
+        <div class="panel">
+          <input type="search" id="searchInput" placeholder="ค้นหา ลูกค้า / รหัสงาน / Sales / ปลายทาง">
+          <div class="chips" id="statusChips">
+            <button class="chip active" data-status="all">ทั้งหมด</button>
+            <button class="chip" data-status="รอตัด">รอตัด</button>
+            <button class="chip" data-status="ตัดเสร็จ">รอส่ง</button>
+            <button class="chip" data-status="ส่งแล้ว">ส่งแล้ว</button>
+            <button class="chip" data-status="ยกเลิก">ยกเลิก</button>
+          </div>
+        </div>
+
+        <div id="jobList" class="job-list"></div>
+        <div id="emptyState" class="empty hidden">ไม่พบรายการที่ตรงกับเงื่อนไข</div>
+      </div>
+
+      <!-- ---------- สรุปวันนี้ ---------- -->
+      <div id="summaryView" class="hidden">
+        <section class="summary-block">
+          <h2 class="sec-title"><span class="dot dot-blue"></span> รอจัดส่ง <span class="sec-sub">ตัดเสร็จแล้ว ยังไม่ได้ส่ง</span></h2>
+          <div id="pendingShipList" class="job-list compact"></div>
+        </section>
+
+        <section class="summary-block">
+          <h2 class="sec-title"><span class="dot dot-amber"></span> ตัดเสร็จวันนี้ <span class="sec-sub" id="todayLabel"></span></h2>
+          <div id="cutTodayList" class="job-list compact"></div>
+        </section>
+
+        <section class="summary-block">
+          <h2 class="sec-title"><span class="dot dot-green"></span> ส่งแล้ววันนี้</h2>
+          <div id="shipTodayList" class="job-list compact"></div>
+        </section>
+      </div>
+
+    </main>
+  </div>
+
+  <!-- แถบนำทางล่างจอ (มือถือ) -->
+  <nav class="bottom-nav">
+    <button class="bn-item active" data-view="jobs">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"
+           stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <rect x="3" y="4" width="18" height="16" rx="2.5"/>
+        <path d="M8 9h9M8 13h9M8 17h5"/>
+      </svg>
+      <span>รายการงาน</span>
+    </button>
+    <button class="bn-item" data-view="summary">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"
+           stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>
+      </svg>
+      <span>สรุปวันนี้</span>
+    </button>
+  </nav>
+
+  <button class="fab hidden" id="newJobBtn" aria-label="สร้างงานใหม่">+</button>
+</div>
+
+<!-- ================= Modal: งาน ================= -->
+<div class="modal-backdrop hidden" id="modalBackdrop">
+  <div class="modal" role="dialog" aria-modal="true">
+    <div class="modal-head">
+      <h2 id="modalTitle">รายละเอียดงาน</h2>
+      <button class="icon-btn" id="modalClose" aria-label="ปิด">✕</button>
+    </div>
+
+    <form id="jobForm" class="modal-body">
+      <div class="modal-meta hidden" id="modalMeta"></div>
+
+      <section class="fset">
+        <h3 class="fset-title">ข้อมูลงาน</h3>
+        <div class="frow"><label for="f_customer">ลูกค้า <b class="req">*</b></label>
+          <input type="text" id="f_customer" name="customer" required></div>
+        <div class="frow"><label for="f_sales">Sales / AE</label>
+          <input type="text" id="f_sales" name="sales"></div>
+        <div class="frow"><label for="f_jobName">ชื่องาน / แบบกล่อง</label>
+          <input type="text" id="f_jobName" name="jobName"></div>
+        <div class="frow"><label for="f_qty">จำนวน</label>
+          <input type="text" id="f_qty" name="qty" inputmode="numeric"></div>
+        <div class="frow"><label for="f_dueDate">กำหนดส่ง</label>
+          <input type="date" id="f_dueDate" name="dueDate"></div>
+        <div class="frow"><label for="f_note">หมายเหตุ</label>
+          <textarea id="f_note" name="note" rows="2"></textarea></div>
+      </section>
+
+      <section class="fset">
+        <h3 class="fset-title">ปลายทางจัดส่ง</h3>
+        <div class="frow"><label for="f_destination">สถานที่จัดส่ง <b class="req">*</b></label>
+          <textarea id="f_destination" name="destination" rows="2" required></textarea></div>
+      </section>
+
+      <section class="fset" id="shippingBlock">
+        <h3 class="fset-title">ข้อมูลการจัดส่ง
+          <span class="fset-hint">ฝ่ายจัดส่งเป็นผู้กรอก</span></h3>
+        <div class="frow"><label for="f_contactName">ผู้ติดต่อ</label>
+          <input type="text" id="f_contactName" name="contactName"></div>
+        <div class="frow"><label for="f_contactPhone">เบอร์ติดต่อ</label>
+          <input type="tel" id="f_contactPhone" name="contactPhone" inputmode="tel"></div>
+        <div class="frow"><label for="f_vehicle">ทะเบียนรถ</label>
+          <input type="text" id="f_vehicle" name="vehicle" placeholder="ทะเบียน / คนขับ"></div>
+      </section>
+
+      <div id="modalError" class="alert hidden"></div>
+    </form>
+
+    <div class="modal-foot" id="modalActions"></div>
+  </div>
+</div>
+
+<!-- ================= Modal: เปลี่ยนรหัสผ่าน ================= -->
+<div class="modal-backdrop hidden" id="pwBackdrop">
+  <div class="modal modal-sm" role="dialog" aria-modal="true">
+    <div class="modal-head">
+      <h2>เปลี่ยนรหัสผ่าน</h2>
+      <button class="icon-btn" id="pwClose" aria-label="ปิด">✕</button>
+    </div>
+    <form id="pwForm" class="modal-body">
+      <label class="stack"><span>รหัสผ่านเดิม</span>
+        <input type="password" name="oldPassword" autocomplete="current-password" required></label>
+      <label class="stack"><span>รหัสผ่านใหม่ (อย่างน้อย 6 ตัว)</span>
+        <input type="password" name="newPassword" autocomplete="new-password" minlength="6" required></label>
+      <div id="pwError" class="alert hidden"></div>
+    </form>
+    <div class="modal-foot">
+      <button class="btn" id="pwCancel">ยกเลิก</button>
+      <button class="btn btn-primary" id="pwSave">บันทึก</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

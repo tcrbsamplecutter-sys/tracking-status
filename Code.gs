@@ -428,6 +428,44 @@ function adminResetPassword() {
   Logger.log('ตั้งรหัสผ่านใหม่ให้ ' + username + ' เรียบร้อย');
 }
 
+/**
+ * ล้างข้อมูลงานทั้งหมด เริ่มนับรหัสงานใหม่ตั้งแต่ 001
+ * บัญชีผู้ใช้และรหัสผ่านไม่ถูกแตะต้อง
+ *
+ * ⚠️ ลบแล้วกู้จากในระบบไม่ได้ — ถ้าจะกู้ต้องใช้ File → Version history ของ Google Sheet
+ * วิธีใช้: เปลี่ยน CONFIRM เป็น true แล้วกด Run
+ */
+function adminClearJobs() {
+  const CONFIRM = false;    // ← เปลี่ยนเป็น true เพื่อยืนยันว่าจะลบจริง
+  const CLEAR_LOG = true;   // ล้างชีต Log ด้วยหรือไม่
+
+  if (!CONFIRM) {
+    throw new Error('ยังไม่ได้ยืนยัน — เปลี่ยน CONFIRM เป็น true ก่อนแล้วค่อยกด Run');
+  }
+
+  const lock = LockService.getScriptLock();
+  lock.waitLock(15000);
+  try {
+    const jobs = sheet(CFG.JOBS);
+    const jobRows = jobs.getLastRow() - 1;
+    if (jobRows > 0) jobs.deleteRows(2, jobRows);
+
+    let logRows = 0;
+    if (CLEAR_LOG) {
+      const log = sheet(CFG.LOG);
+      logRows = log.getLastRow() - 1;
+      if (logRows > 0) log.deleteRows(2, logRows);
+    }
+
+    Logger.log('ล้างข้อมูลเรียบร้อย — ลบงาน ' + Math.max(jobRows, 0) + ' รายการ, ' +
+      'ลบ log ' + Math.max(logRows, 0) + ' บรรทัด\n' +
+      'รหัสงานถัดไปจะเริ่มที่ ' + nextJobId(jobs) + '\n' +
+      'อย่าลืมเปลี่ยน CONFIRM กลับเป็น false');
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 /** เพิ่มผู้ใช้ใหม่ (แก้ค่าแล้วกดรัน) */
 function adminAddUser() {
   const username = 'newuser';

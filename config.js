@@ -5,5 +5,5 @@
  * หน้าตาจะประมาณ: https://script.google.com/macros/s/AKfycb...../exec
  */
 const CONFIG = {
-  API_URL: 'https://script.google.com/macros/s/AKfycby86tpCv0tO9RPPq86dvmT1-GHKknoleATBJokeKuMLGmsDJQRU4Wt0yp44VBFFKtLANw/exec',
+  API_URL: 'https://script.google.com/macros/s/AKfycbz0gGx4Hv9qkEHlQZOmA3R4XezrxHmn80WUNT-bIg4ayEJJLP2BXUIfyrJgK6jxLV2ctQ/exec',
 };

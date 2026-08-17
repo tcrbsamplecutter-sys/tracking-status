@@ -233,6 +233,48 @@ function requireAe(name) {
   return ae;
 }
 
+/** ทุกแถวรวมที่ปิดใช้งานแล้ว — ใช้ในหน้าตั้งค่าซึ่งต้องเห็นครบเพื่อเปิดกลับได้ */
+function allAes() {
+  return readSheet(CFG.AES, AE_COLS)
+    .filter(function (a) { return String(a.name).trim() !== ''; })
+    .map(function (a) {
+      return {
+        name: String(a.name).trim(),
+        email: String(a.email).trim(),
+        active: String(a.active).toLowerCase() !== 'no',
+      };
+    });
+}
+
+/** เลขแถวจริงในชีตของ AE ชื่อนี้ (0 = ไม่พบ) — ข้อมูลเริ่มแถว 2 เพราะแถว 1 เป็นหัวตาราง */
+function findAeRow(name) {
+  const target = String(name || '').trim();
+  if (!target) return 0;
+  const rows = readSheet(CFG.AES, AE_COLS);
+  for (let i = 0; i < rows.length; i++) {
+    if (String(rows[i].name).trim() === target) return i + 2;
+  }
+  return 0;
+}
+
+/**
+ * แยกอีเมลที่คั่นด้วยจุลภาค ตรวจรูปแบบ แล้วคืนสตริงที่จัดรูปแล้ว
+ * ใช้ร่วมกันทั้งอีเมลแจ้งเตือนและอีเมล AE จะได้ตรวจด้วยเกณฑ์เดียวกัน
+ */
+function parseEmails(text) {
+  const list = String(text || '').split(',')
+    .map(function (s) { return s.trim(); })
+    .filter(function (s) { return s !== ''; });
+
+  if (!list.length) throw new Error('กรุณากรอกอีเมล');
+
+  const re = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  list.forEach(function (e) {
+    if (!re.test(e)) throw new Error('รูปแบบอีเมลไม่ถูกต้อง: ' + e);
+  });
+  return list.join(', ');
+}
+
 /* ============================================================
  * อีเมลแจ้งเตือน
  * ========================================================== */
@@ -492,6 +534,82 @@ const HANDLERS = {
     const job = readJobRow(target.row);
     if (mailAe) notifyShipped(job);
     return { job: job };
+  },
+
+  /* ---------- หน้าตั้งค่า — เฉพาะช่างตัด ---------- */
+
+  getSettings: function (req) {
+    const user = requireUser(req);
+    requireRole(user, [ROLE.CUTTER]);
+    return { notifyEmail: notifyEmail(), aes: allAes() };
+  },
+
+  setNotifyEmail: function (req) {
+    const user = requireUser(req);
+    requireRole(user, [ROLE.CUTTER]);
+
+    const next = parseEmails(req.email);
+    const prev = notifyEmail();
+    PropertiesService.getScriptProperties().setProperty('NOTIFY_EMAIL', next);
+
+    // เปลี่ยนปลายทางอีเมล = เปลี่ยนทางเดินข้อมูลลูกค้า ต้องสาวกลับได้ว่าใครเปลี่ยน
+    writeLog(user.username, 'เปลี่ยนอีเมลแจ้งเตือน', '', (prev || '(ว่าง)') + ' → ' + next);
+    return { notifyEmail: next };
+  },
+
+  /** originalName ว่าง = เพิ่มใหม่ · มีค่า = แก้แถวเดิม (รองรับการเปลี่ยนชื่อ) */
+  saveAe: function (req) {
+    const user = requireUser(req);
+    requireRole(user, [ROLE.CUTTER]);
+
+    const name = String(req.name || '').trim();
+    if (!name) throw new Error('กรุณากรอกชื่อ AE');
+    const email = parseEmails(req.email);
+    const original = String(req.originalName || '').trim();
+    const active = req.active === false ? 'no' : 'yes';
+
+    const lock = LockService.getScriptLock();
+    lock.waitLock(15000);
+    try {
+      const sh = sheet(CFG.AES);
+      const row = original ? findAeRow(original) : 0;
+      if (original && !row) throw new Error('ไม่พบ AE ชื่อ "' + original + '"');
+
+      const clash = findAeRow(name);
+      if (clash && clash !== row) throw new Error('มีชื่อ "' + name + '" อยู่แล้ว');
+
+      if (!row) {
+        sh.appendRow([name, email, active]);
+        writeLog(user.username, 'เพิ่ม AE', '', name + ' / ' + email);
+      } else {
+        const before = sh.getRange(row, 1, 1, AE_COLS.length).getValues()[0];
+        sh.getRange(row, 1, 1, AE_COLS.length).setValues([[name, email, active]]);
+        writeLog(user.username, 'แก้ AE', '',
+          before[0] + ' / ' + before[1] + '  →  ' + name + ' / ' + email);
+      }
+    } finally {
+      lock.releaseLock();
+    }
+    return { aes: allAes() };
+  },
+
+  /**
+   * เปิด/ปิดการใช้งาน AE — ไม่มีการลบแถว เพราะงานเก่าเก็บชื่อ AE ไว้เป็น snapshot
+   * ลบทิ้งแล้วงานเก่าจะกลายเป็นชื่อลอยที่สาวกลับไม่ได้
+   */
+  setAeActive: function (req) {
+    const user = requireUser(req);
+    requireRole(user, [ROLE.CUTTER]);
+
+    const name = String(req.name || '').trim();
+    const row = findAeRow(name);
+    if (!row) throw new Error('ไม่พบ AE ชื่อ "' + name + '"');
+
+    const active = req.active ? 'yes' : 'no';
+    sheet(CFG.AES).getRange(row, AE_COLS.indexOf('active') + 1).setValue(active);
+    writeLog(user.username, 'ตั้งสถานะ AE', '',
+      name + ' → ' + (active === 'yes' ? 'ใช้งาน' : 'ปิดใช้งาน'));
+    return { aes: allAes() };
   },
 
   changePassword: function (req) {

@@ -16,7 +16,7 @@ const STATUS_CLASS = {
 
 const ROLE_LABEL = { cutter: 'ช่างตัด', shipping: 'จัดส่ง', viewer: 'ดูอย่างเดียว' };
 
-const VIEW_TITLE = { jobs: 'รายการงาน', summary: 'สรุปวันนี้' };
+const VIEW_TITLE = { jobs: 'รายการงาน', dashboard: 'Dashboard', settings: 'ตั้งค่า' };
 
 /**
  * ฟิลด์ที่แต่ละบทบาทแก้ไขได้
@@ -41,6 +41,9 @@ const state = {
   search: '',
   view: 'jobs',
   editingId: null,
+  dashSearch: '',
+  dashBasis: 'createdAt',
+  settings: { notifyEmail: '', aes: [] },
 };
 
 const $ = function (sel) { return document.querySelector(sel); };
@@ -120,7 +123,15 @@ function can(action) {
   if (action === 'create') return role === 'cutter';
   if (action === 'markShip') return role === 'shipping';
   if (action === 'cancel') return role === 'cutter';
+  if (action === 'manage') return role === 'cutter';
   return false;
+}
+
+/** ใช้ร่วมกันทั้งหน้ารายการงานและ Dashboard จะได้ค้นด้วยเกณฑ์เดียวกัน */
+function matchesSearch(job, term) {
+  if (!term) return true;
+  return [job.id, job.customer, job.fileCode, job.aeName, job.destination,
+          job.contactName, job.vehicle].join(' ').toLowerCase().indexOf(term) !== -1;
 }
 
 /* ============================================================
@@ -160,6 +171,7 @@ function logout() {
   state.user = null;
   state.jobs = [];
   state.aes = [];
+  state.settings = { notifyEmail: '', aes: [] };
   localStorage.removeItem('token');
   localStorage.removeItem('user');
   $('#appView').classList.add('hidden');
@@ -172,6 +184,13 @@ async function enterApp() {
   $('#appView').classList.remove('hidden');
   $('#userName').textContent = state.user.name;
   $('#userRole').textContent = ROLE_LABEL[state.user.role] || state.user.role;
+
+  // เมนูตั้งค่าเห็นเฉพาะช่างตัด (เซิร์ฟเวอร์ตรวจซ้ำอีกชั้นอยู่แล้ว)
+  $$('[data-cutter-only]').forEach(function (el) {
+    el.classList.toggle('hidden', !can('manage'));
+  });
+  if (state.view === 'settings' && !can('manage')) state.view = 'jobs';
+
   setView(state.view);
   await loadJobs();
 }
@@ -182,9 +201,12 @@ function setView(view) {
     b.classList.toggle('active', b.dataset.view === view);
   });
   $('#jobsView').classList.toggle('hidden', view !== 'jobs');
-  $('#summaryView').classList.toggle('hidden', view !== 'summary');
+  $('#dashboardView').classList.toggle('hidden', view !== 'dashboard');
+  $('#settingsView').classList.toggle('hidden', view !== 'settings');
   $('#pageTitle').textContent = VIEW_TITLE[view] || '';
   $('#newJobBtn').classList.toggle('hidden', !can('create') || view !== 'jobs');
+
+  if (view === 'settings') loadSettings();
 }
 
 /* ============================================================
@@ -206,7 +228,7 @@ async function loadJobs() {
 function render() {
   renderStats();
   renderJobList();
-  renderSummary();
+  renderDashboard();
 }
 
 function renderStats() {
@@ -237,10 +259,7 @@ function renderStats() {
 
 function matchesFilter(job) {
   if (state.filter !== 'all' && job.status !== state.filter) return false;
-  if (!state.search) return true;
-  const hay = [job.id, job.customer, job.fileCode, job.aeName, job.destination,
-               job.contactName, job.vehicle].join(' ').toLowerCase();
-  return hay.indexOf(state.search) !== -1;
+  return matchesSearch(job, state.search);
 }
 
 function jobCard(job, compact) {
@@ -284,27 +303,221 @@ function renderJobList() {
   $('#emptyState').classList.toggle('hidden', list.length > 0);
 }
 
-function renderSummary() {
-  $('#todayLabel').textContent = thaiDate(state.today);
+/* ============================================================
+ * Dashboard
+ * ========================================================== */
 
-  const fill = function (sel, jobs, emptyText) {
-    $(sel).innerHTML = jobs.length
-      ? jobs.map(function (j) { return jobCard(j, true); }).join('')
-      : '<div class="empty">' + emptyText + '</div>';
+/**
+ * จัดกลุ่มงานตามวัน เรียงวันใหม่สุดขึ้นก่อน
+ * งานที่ไม่มีค่าวันที่ในโหมดนั้นถูกแยกไว้ใน noDate เพื่อไม่ให้หายไปจากจอเงียบๆ
+ * (สำคัญมากในโหมด "ยึดวันจัดส่ง" เพราะงานที่ยังไม่ส่งไม่มี shipAt)
+ */
+function groupByDay(jobs, basis) {
+  const map = {};
+  const noDate = [];
+
+  jobs.forEach(function (j) {
+    const day = String(j[basis] || '').slice(0, 10);
+    if (!day) { noDate.push(j); return; }
+    if (!map[day]) map[day] = [];
+    map[day].push(j);
+  });
+
+  const groups = Object.keys(map).sort().reverse().map(function (day) {
+    return { day: day, jobs: map[day] };
+  });
+  return { groups: groups, noDate: noDate };
+}
+
+function dayCounts(jobs) {
+  const c = { pend: 0, ship: 0, cancel: 0 };
+  jobs.forEach(function (j) {
+    if (j.status === STATUS.PENDING) c.pend++;
+    else if (j.status === STATUS.SHIP) c.ship++;
+    else if (j.status === STATUS.CANCEL) c.cancel++;
+  });
+  return c;
+}
+
+function subBlock(title, cls, jobs) {
+  if (!jobs.length) return '';
+  return '<div class="day-sub">' +
+    '<div class="sub-title ' + cls + '">' + title + ' (' + jobs.length + ')</div>' +
+    '<div class="job-list compact">' +
+      jobs.map(function (j) { return jobCard(j, true); }).join('') +
+    '</div></div>';
+}
+
+function dayBlock(label, jobs, splitByStatus) {
+  const c = dayCounts(jobs);
+  const counts = [];
+  if (c.pend) counts.push('<span class="c-pend">● รอส่ง ' + c.pend + '</span>');
+  if (c.ship) counts.push('<span class="c-ship">✓ ส่งแล้ว ' + c.ship + '</span>');
+  if (c.cancel) counts.push('<span class="c-cancel">ยกเลิก ' + c.cancel + '</span>');
+
+  const byStatus = function (s) {
+    return jobs.filter(function (j) { return j.status === s; });
   };
 
-  fill('#pendingShipList',
-    state.jobs.filter(function (j) { return j.status === STATUS.PENDING; }),
-    'ไม่มีงานค้างรอส่ง');
+  // แยกรอส่ง/ส่งแล้วเฉพาะตอนที่กลุ่มนั้นปนกันจริง
+  // โหมดยึดวันจัดส่ง ทุกงานในกลุ่มรายวันคือส่งแล้วทั้งหมด แยกไปก็ไม่ได้ความ
+  const body = splitByStatus
+    ? subBlock('● รอส่ง', 'pend', byStatus(STATUS.PENDING)) +
+      subBlock('✓ ส่งแล้ว', 'ship', byStatus(STATUS.SHIP)) +
+      subBlock('ยกเลิก', 'cancel', byStatus(STATUS.CANCEL))
+    : '<div class="job-list compact">' +
+        jobs.map(function (j) { return jobCard(j, true); }).join('') + '</div>';
 
-  fill('#cutTodayList',
-    state.jobs.filter(function (j) { return isToday(j.createdAt); }),
-    'วันนี้ยังไม่มีงานที่บันทึก');
-
-  fill('#shipTodayList',
-    state.jobs.filter(function (j) { return isToday(j.shipAt); }),
-    'วันนี้ยังไม่มีงานที่จัดส่ง');
+  return '<section class="day-group">' +
+    '<div class="day-head">' +
+      '<span class="day-date">' + esc(label) + '</span>' +
+      '<span class="day-total">รวม ' + jobs.length + ' รายการ</span>' +
+      '<span class="day-counts">' + counts.join('') + '</span>' +
+    '</div>' + body + '</section>';
 }
+
+function renderDashboard() {
+  const basis = state.dashBasis;
+  const list = state.jobs.filter(function (j) { return matchesSearch(j, state.dashSearch); });
+  const g = groupByDay(list, basis);
+  const html = [];
+
+  if (g.noDate.length) {
+    html.push(dayBlock(basis === 'shipAt' ? 'ยังไม่ได้ส่ง' : 'ไม่ระบุวันที่', g.noDate, true));
+  }
+  g.groups.forEach(function (grp) {
+    html.push(dayBlock(thaiDate(grp.day), grp.jobs, basis === 'createdAt'));
+  });
+
+  $('#dayGroups').innerHTML = html.join('');
+  $('#dashEmpty').classList.toggle('hidden', html.length > 0);
+}
+
+/* ============================================================
+ * หน้าตั้งค่า
+ * ========================================================== */
+
+async function loadSettings() {
+  try {
+    const data = await api('getSettings');
+    state.settings = { notifyEmail: data.notifyEmail || '', aes: data.aes || [] };
+    syncActiveAes();
+    renderSettings();
+  } catch (ex) {
+    toast(ex.message, true);
+  }
+}
+
+/** ให้ดรอปดาวน์ AE ในฟอร์มงานอัพเดตตามทันทีโดยไม่ต้องรีเฟรชหรือ login ใหม่ */
+function syncActiveAes() {
+  state.aes = state.settings.aes
+    .filter(function (a) { return a.active; })
+    .map(function (a) { return { name: a.name, email: a.email }; });
+}
+
+function aeRow(ae) {
+  const isNew = !ae;
+  const name = isNew ? '' : ae.name;
+  const email = isNew ? '' : ae.email;
+  const checked = isNew || ae.active ? ' checked' : '';
+
+  return '<div class="ae-row" data-original="' + esc(name) + '">' +
+    '<input class="ae-name" type="text" value="' + esc(name) + '" placeholder="ชื่อ AE">' +
+    '<input class="ae-email" type="text" value="' + esc(email) + '" ' +
+      'placeholder="name@scg.com" autocapitalize="none" spellcheck="false">' +
+    '<label class="ae-active"><input type="checkbox"' + checked + '></label>' +
+    '<button class="btn ae-save">บันทึก</button>' +
+  '</div>';
+}
+
+function renderSettings() {
+  $('#notifyEmail').value = state.settings.notifyEmail;
+  $('#notifyError').classList.add('hidden');
+  $('#aeError').classList.add('hidden');
+  $('#aeList').innerHTML = state.settings.aes.length
+    ? state.settings.aes.map(aeRow).join('')
+    : '<div class="empty">ยังไม่มีรายชื่อ AE — กด "เพิ่ม AE ใหม่" ด้านล่าง</div>';
+}
+
+function settingsError(sel, msg) {
+  const el = $(sel);
+  el.textContent = msg;
+  el.classList.remove('hidden');
+}
+
+$('#saveNotifyBtn').addEventListener('click', async function () {
+  const btn = $('#saveNotifyBtn');
+  $('#notifyError').classList.add('hidden');
+  btn.disabled = true;
+  try {
+    const data = await api('setNotifyEmail', { email: $('#notifyEmail').value.trim() });
+    state.settings.notifyEmail = data.notifyEmail;
+    $('#notifyEmail').value = data.notifyEmail;
+    toast('บันทึกอีเมลแจ้งเตือนแล้ว');
+  } catch (ex) {
+    settingsError('#notifyError', ex.message);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+$('#addAeBtn').addEventListener('click', function () {
+  const list = $('#aeList');
+  if (!state.settings.aes.length) list.innerHTML = '';
+  list.insertAdjacentHTML('beforeend', aeRow(null));
+  list.lastElementChild.querySelector('.ae-name').focus();
+});
+
+$('#aeList').addEventListener('click', async function (e) {
+  const btn = e.target.closest('.ae-save');
+  if (!btn) return;
+
+  const row = btn.closest('.ae-row');
+  $('#aeError').classList.add('hidden');
+  btn.disabled = true;
+  const original = btn.textContent;
+  btn.textContent = '...';
+
+  try {
+    const data = await api('saveAe', {
+      originalName: row.dataset.original,
+      name: row.querySelector('.ae-name').value.trim(),
+      email: row.querySelector('.ae-email').value.trim(),
+      active: row.querySelector('input[type="checkbox"]').checked,
+    });
+    state.settings.aes = data.aes;
+    syncActiveAes();
+    renderSettings();
+    toast('บันทึกรายชื่อ AE แล้ว');
+  } catch (ex) {
+    settingsError('#aeError', ex.message);
+    btn.disabled = false;
+    btn.textContent = original;
+  }
+});
+
+$('#aeList').addEventListener('change', async function (e) {
+  const box = e.target;
+  if (box.type !== 'checkbox') return;
+
+  const row = box.closest('.ae-row');
+  // แถวที่เพิ่งกด "เพิ่ม AE ใหม่" ยังไม่มีในชีต ค่อยบันทึกพร้อมทั้งแถวตอนกดปุ่ม
+  if (!row.dataset.original) return;
+
+  $('#aeError').classList.add('hidden');
+  try {
+    const data = await api('setAeActive', {
+      name: row.dataset.original,
+      active: box.checked,
+    });
+    state.settings.aes = data.aes;
+    syncActiveAes();
+    toast(box.checked ? 'เปิดใช้งาน AE แล้ว' : 'ปิดใช้งาน AE แล้ว');
+  } catch (ex) {
+    box.checked = !box.checked;
+    settingsError('#aeError', ex.message);
+  }
+});
 
 /* ============================================================
  * Modal งาน
@@ -490,7 +703,7 @@ document.addEventListener('click', function (e) {
 
 $('#newJobBtn').addEventListener('click', function () {
   if (!state.aes.length) {
-    toast('ยังไม่มีรายชื่อ AE ในระบบ — ให้ผู้ดูแลกรอกชีต AEs ก่อน', true);
+    toast('ยังไม่มีรายชื่อ AE ในระบบ — เพิ่มได้ที่หน้าตั้งค่า', true);
     return;
   }
   openModal(null);
@@ -519,6 +732,21 @@ $('#statusChips').addEventListener('click', function (e) {
   chip.classList.add('active');
   state.filter = chip.dataset.status;
   renderJobList();
+});
+
+/* ---------- Dashboard ---------- */
+$('#dashSearch').addEventListener('input', function (e) {
+  state.dashSearch = e.target.value.trim().toLowerCase();
+  renderDashboard();
+});
+
+$('#basisChips').addEventListener('click', function (e) {
+  const chip = e.target.closest('.chip');
+  if (!chip) return;
+  $$('#basisChips .chip').forEach(function (c) { c.classList.remove('active'); });
+  chip.classList.add('active');
+  state.dashBasis = chip.dataset.basis;
+  renderDashboard();
 });
 
 /* ---------- เปลี่ยนรหัสผ่าน ---------- */

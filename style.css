@@ -65,6 +65,12 @@ input:disabled, textarea:disabled {
 textarea { resize: vertical; min-height: 62px; }
 ::placeholder { color: #9aa2ac; }
 
+/* ช่องติ๊กไม่ควรโดนกฎความกว้าง/ความสูงของช่องกรอกด้านบน */
+input[type="checkbox"] {
+  width: 20px; height: 20px; min-height: 0; padding: 0;
+  accent-color: var(--blue); cursor: pointer;
+}
+
 /* ป้ายกำกับซ้าย + ช่องกรอกขวา */
 .frow {
   display: grid;
@@ -262,8 +268,69 @@ textarea { resize: vertical; min-height: 62px; }
 .due-late { color: var(--red); font-weight: 600; }
 .compact .job-card { padding: 12px 14px; }
 
-/* ============ สรุปวันนี้ ============ */
-.summary-block { margin-bottom: 28px; }
+/* ============ Dashboard ============ */
+.day-group { margin-bottom: 26px; }
+
+.day-head {
+  display: flex; align-items: baseline; gap: 8px 14px; flex-wrap: wrap;
+  padding-bottom: 9px; margin-bottom: 13px;
+  border-bottom: 2px solid var(--border);
+}
+.day-date {
+  font-size: 17px; font-weight: 700; color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.day-total { font-size: 13px; color: var(--muted); }
+.day-counts {
+  display: flex; gap: 14px; flex-wrap: wrap;
+  margin-left: auto; font-size: 12.5px; font-weight: 600;
+}
+.c-pend   { color: var(--blue); }
+.c-ship   { color: var(--green); }
+.c-cancel { color: var(--gray); }
+
+.day-sub { margin-bottom: 15px; }
+.sub-title {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 13.5px; font-weight: 600; margin-bottom: 9px;
+}
+.sub-title.pend   { color: var(--blue); }
+.sub-title.ship   { color: var(--green); }
+.sub-title.cancel { color: var(--gray); }
+
+/* ============ ตาราง AE ในหน้าตั้งค่า ============ */
+.ae-row {
+  display: grid;
+  grid-template-columns: 1fr 1.5fr 58px 84px;
+  gap: 10px; align-items: center;
+  margin-bottom: 10px;
+}
+.ae-head {
+  font-size: 12.5px; font-weight: 600; color: var(--muted);
+  padding-bottom: 6px; margin-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+.ae-row input[type="text"] { min-height: 40px; padding: 8px 11px; font-size: 14px; }
+.ae-active { display: grid; place-items: center; }
+.ae-row .btn { min-height: 40px; padding: 8px 12px; font-size: 13.5px; }
+
+@media (max-width: 640px) {
+  .ae-head { display: none; }
+  .ae-row {
+    grid-template-columns: 1fr auto;
+    gap: 9px; margin-bottom: 14px; padding: 13px;
+    background: var(--panel-bg);
+    border: 1px solid var(--border); border-radius: 10px;
+  }
+  .ae-name, .ae-email { grid-column: 1 / -1; }
+}
+
+.hint-text {
+  font-size: 12.5px; color: var(--muted); line-height: 1.8;
+  margin-top: 16px; padding-top: 13px;
+  border-top: 1px solid var(--border);
+}
+
 .sec-title {
   font-size: 15px; font-weight: 600; color: var(--blue);
   display: flex; align-items: center; gap: 9px; flex-wrap: wrap;

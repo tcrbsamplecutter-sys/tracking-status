@@ -63,12 +63,20 @@
         </svg>
         <span>รายการงาน</span>
       </button>
-      <button class="side-item" data-view="summary">
+      <button class="side-item" data-view="dashboard">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"
              stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>
         </svg>
-        <span>สรุปวันนี้</span>
+        <span>Dashboard</span>
+      </button>
+      <button class="side-item hidden" data-view="settings" data-cutter-only>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="3.2"/>
+          <path d="M19.4 15a1.6 1.6 0 0 0 .32 1.77l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.6 1.6 0 0 0-1.77-.32 1.6 1.6 0 0 0-1 1.47V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 9 19.4a1.6 1.6 0 0 0-1.77.32l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.6 1.6 0 0 0 4.6 15a1.6 1.6 0 0 0-1.47-1H3a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 4.6 9a1.6 1.6 0 0 0-.32-1.77l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.6 1.6 0 0 0 9 4.6a1.6 1.6 0 0 0 1-1.47V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 1 1.47 1.6 1.6 0 0 0 1.77-.32l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.6 1.6 0 0 0 19.4 9v0a1.6 1.6 0 0 0 1.47 1H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1Z"/>
+        </svg>
+        <span>ตั้งค่า</span>
       </button>
     </nav>
   </aside>
@@ -104,21 +112,52 @@
         <div id="emptyState" class="empty hidden">ไม่พบรายการที่ตรงกับเงื่อนไข</div>
       </div>
 
-      <!-- ---------- สรุปวันนี้ ---------- -->
-      <div id="summaryView" class="hidden">
-        <section class="summary-block">
-          <h2 class="sec-title"><span class="dot dot-blue"></span> รอจัดส่ง <span class="sec-sub">บันทึกแล้ว ยังไม่ได้ส่ง</span></h2>
-          <div id="pendingShipList" class="job-list compact"></div>
+      <!-- ---------- Dashboard ---------- -->
+      <div id="dashboardView" class="hidden">
+        <div class="panel">
+          <input type="search" id="dashSearch"
+                 placeholder="ค้นหา ลูกค้า / รหัสงาน / รหัสไฟล์ / AE / ทะเบียนรถ">
+          <div class="chips" id="basisChips">
+            <button class="chip active" data-basis="createdAt">ยึดวันบันทึก</button>
+            <button class="chip" data-basis="shipAt">ยึดวันจัดส่ง</button>
+          </div>
+        </div>
+
+        <div id="dayGroups"></div>
+        <div id="dashEmpty" class="empty hidden">ไม่พบรายการที่ตรงกับเงื่อนไข</div>
+      </div>
+
+      <!-- ---------- ตั้งค่า (เฉพาะช่างตัด) ---------- -->
+      <div id="settingsView" class="hidden">
+        <section class="fset">
+          <h3 class="fset-title">อีเมลแจ้งเตือนงานรอส่ง
+            <span class="fset-hint">ส่งถึงใครเมื่อมีการบันทึกงานใหม่</span></h3>
+          <div class="panel">
+            <label class="stack"><span>อีเมล — หลายคนคั่นด้วยจุลภาค</span>
+              <input type="text" id="notifyEmail" autocapitalize="none"
+                     placeholder="name@scg.com, name2@scg.com"></label>
+            <div id="notifyError" class="alert hidden"></div>
+            <button class="btn btn-primary" id="saveNotifyBtn">บันทึกอีเมล</button>
+          </div>
         </section>
 
-        <section class="summary-block">
-          <h2 class="sec-title"><span class="dot dot-amber"></span> บันทึกวันนี้ <span class="sec-sub" id="todayLabel"></span></h2>
-          <div id="cutTodayList" class="job-list compact"></div>
-        </section>
+        <section class="fset">
+          <h3 class="fset-title">รายชื่อ AE
+            <span class="fset-hint">ตัวเลือกตอนบันทึกงาน และปลายทางเมลตอนจัดส่งเสร็จ</span></h3>
+          <div class="panel">
+            <div class="ae-row ae-head">
+              <span>ชื่อ AE</span><span>อีเมล</span><span>ใช้งาน</span><span></span>
+            </div>
+            <div id="aeList"></div>
+            <div id="aeError" class="alert hidden"></div>
+            <button class="btn" id="addAeBtn">+ เพิ่ม AE ใหม่</button>
 
-        <section class="summary-block">
-          <h2 class="sec-title"><span class="dot dot-green"></span> ส่งแล้ววันนี้</h2>
-          <div id="shipTodayList" class="job-list compact"></div>
+            <p class="hint-text">
+              <b>ไม่มีปุ่มลบโดยตั้งใจ</b> — งานเก่าเก็บชื่อ AE ไว้ ถ้าลบทิ้งจะกลายเป็นชื่อลอย
+              ให้ติ๊ก "ใช้งาน" ออกแทน ชื่อจะหายจากดรอปดาวน์ตอนบันทึกงานใหม่ แต่งานเก่ายังอ่านได้ครบ<br>
+              การแก้ชื่อหรืออีเมล <b>ไม่ย้อนไปแก้งานที่บันทึกไปแล้ว</b>
+            </p>
+          </div>
         </section>
       </div>
 
@@ -135,12 +174,20 @@
       </svg>
       <span>รายการงาน</span>
     </button>
-    <button class="bn-item" data-view="summary">
+    <button class="bn-item" data-view="dashboard">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"
            stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>
       </svg>
-      <span>สรุปวันนี้</span>
+      <span>Dashboard</span>
+    </button>
+    <button class="bn-item hidden" data-view="settings" data-cutter-only>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"
+           stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="3.2"/>
+        <path d="M19.4 15a1.6 1.6 0 0 0 .32 1.77l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.6 1.6 0 0 0-1.77-.32 1.6 1.6 0 0 0-1 1.47V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 9 19.4a1.6 1.6 0 0 0-1.77.32l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.6 1.6 0 0 0 4.6 15a1.6 1.6 0 0 0-1.47-1H3a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 4.6 9a1.6 1.6 0 0 0-.32-1.77l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.6 1.6 0 0 0 9 4.6a1.6 1.6 0 0 0 1-1.47V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 1 1.47 1.6 1.6 0 0 0 1.77-.32l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.6 1.6 0 0 0 19.4 9v0a1.6 1.6 0 0 0 1.47 1H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1Z"/>
+      </svg>
+      <span>ตั้งค่า</span>
     </button>
   </nav>
 

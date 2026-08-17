@@ -134,10 +134,50 @@
             <span class="fset-hint">ส่งถึงใครเมื่อมีการบันทึกงานใหม่</span></h3>
           <div class="panel">
             <label class="stack"><span>อีเมล — หลายคนคั่นด้วยจุลภาค</span>
-              <input type="text" id="notifyEmail" autocapitalize="none"
+              <input type="text" id="notifyEmail" autocapitalize="none" spellcheck="false"
                      placeholder="name@scg.com, name2@scg.com"></label>
             <div id="notifyError" class="alert hidden"></div>
             <button class="btn btn-primary" id="saveNotifyBtn">บันทึกอีเมล</button>
+          </div>
+        </section>
+
+        <section class="fset">
+          <h3 class="fset-title">สำเนา CC
+            <span class="fset-hint">แนบสำเนาไปกับเมลที่ระบบส่งออก</span></h3>
+          <div class="panel">
+            <label class="stack"><span>อีเมล — หลายคนคั่นด้วยจุลภาค · เว้นว่าง = ไม่ CC เลย</span>
+              <input type="text" id="ccEmail" autocapitalize="none" spellcheck="false"
+                     placeholder="name@gmail.com"></label>
+            <div id="ccError" class="alert hidden"></div>
+            <button class="btn btn-primary" id="saveCcBtn">บันทึกอีเมล CC</button>
+
+            <div class="switch-group">
+              <label class="switch-row">
+                <input type="checkbox" id="ccOnPending">
+                <span>CC เมลแจ้ง <b>"รอส่ง"</b><em>ที่ส่งถึงฝ่ายจัดส่ง</em></span>
+              </label>
+              <label class="switch-row">
+                <input type="checkbox" id="ccOnShipped">
+                <span>CC เมลแจ้ง <b>"ส่งแล้ว"</b><em>ที่ส่งถึง AE — AE จะเห็นอีเมลใน CC ด้วย</em></span>
+              </label>
+            </div>
+
+            <p class="hint-text">
+              CC ต่างจาก BCC ตรงที่ <b>ผู้รับทุกคนเห็นว่ามีใครอยู่ในสำเนา</b><br>
+              และ CC หนึ่งคน <b>กินโควตาเพิ่ม 1 ต่อเมลหนึ่งฉบับ</b> — เปิดทั้งสองสวิตช์
+              แปลว่างานหนึ่งรายการใช้โควตา 4 แทนที่จะเป็น 2
+            </p>
+          </div>
+        </section>
+
+        <section class="fset">
+          <h3 class="fset-title">โควตาส่งเมล
+            <span class="fset-hint">Gmail ทั่วไปจำกัด 100 ผู้รับต่อวัน</span></h3>
+          <div class="panel">
+            <div class="quota-line">
+              <button class="btn" id="checkQuotaBtn">ตรวจโควตา</button>
+              <span id="quotaResult" class="quota-result">กดเพื่อดูว่าวันนี้ส่งได้อีกกี่ฉบับ</span>
+            </div>
           </div>
         </section>
 
@@ -157,6 +197,28 @@
               ให้ติ๊ก "ใช้งาน" ออกแทน ชื่อจะหายจากดรอปดาวน์ตอนบันทึกงานใหม่ แต่งานเก่ายังอ่านได้ครบ<br>
               การแก้ชื่อหรืออีเมล <b>ไม่ย้อนไปแก้งานที่บันทึกไปแล้ว</b>
             </p>
+          </div>
+        </section>
+
+        <section class="fset">
+          <h3 class="fset-title danger-title">⚠ ล้างประวัติทั้งหมด</h3>
+          <div class="panel danger-zone">
+            <p class="danger-text">
+              ลบ <b>งานทุกรายการ</b> และ <b>บันทึก Log ทั้งหมด</b> · รหัสงานจะเริ่มนับใหม่ที่ 001<br>
+              บัญชีผู้ใช้และรายชื่อ AE ไม่ถูกแตะต้อง
+            </p>
+            <p class="danger-text">
+              <b>กู้คืนจากในระบบไม่ได้</b> — ถ้าลบพลาดต้องกู้จาก
+              <b>File → Version history</b> ของ Google Sheet<br>
+              แนะนำให้ <b>File → Make a copy</b> สำรองไว้ก่อนทุกครั้ง
+            </p>
+
+            <div class="danger-row">
+              <input type="password" id="adminCode" autocapitalize="none" spellcheck="false"
+                     placeholder="รหัสยืนยัน">
+              <button class="btn btn-danger" id="clearHistoryBtn">ล้างข้อมูล</button>
+            </div>
+            <div id="clearError" class="alert hidden"></div>
           </div>
         </section>
       </div>

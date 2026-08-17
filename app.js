@@ -43,8 +43,14 @@ const state = {
   editingId: null,
   dashSearch: '',
   dashBasis: 'createdAt',
-  settings: { notifyEmail: '', aes: [] },
+  settings: {
+    notifyEmail: '', ccEmail: '',
+    ccOnPending: true, ccOnShipped: true,
+    aes: [],
+  },
 };
+
+const EMPTY_SETTINGS = JSON.parse(JSON.stringify(state.settings));
 
 const $ = function (sel) { return document.querySelector(sel); };
 const $$ = function (sel) { return Array.prototype.slice.call(document.querySelectorAll(sel)); };
@@ -171,7 +177,7 @@ function logout() {
   state.user = null;
   state.jobs = [];
   state.aes = [];
-  state.settings = { notifyEmail: '', aes: [] };
+  state.settings = JSON.parse(JSON.stringify(EMPTY_SETTINGS));
   localStorage.removeItem('token');
   localStorage.removeItem('user');
   $('#appView').classList.add('hidden');
@@ -400,7 +406,13 @@ function renderDashboard() {
 async function loadSettings() {
   try {
     const data = await api('getSettings');
-    state.settings = { notifyEmail: data.notifyEmail || '', aes: data.aes || [] };
+    state.settings = {
+      notifyEmail: data.notifyEmail || '',
+      ccEmail: data.ccEmail || '',
+      ccOnPending: data.ccOnPending !== false,
+      ccOnShipped: data.ccOnShipped !== false,
+      aes: data.aes || [],
+    };
     syncActiveAes();
     renderSettings();
   } catch (ex) {
@@ -431,11 +443,18 @@ function aeRow(ae) {
 }
 
 function renderSettings() {
-  $('#notifyEmail').value = state.settings.notifyEmail;
-  $('#notifyError').classList.add('hidden');
-  $('#aeError').classList.add('hidden');
-  $('#aeList').innerHTML = state.settings.aes.length
-    ? state.settings.aes.map(aeRow).join('')
+  const s = state.settings;
+  $('#notifyEmail').value = s.notifyEmail;
+  $('#ccEmail').value = s.ccEmail;
+  $('#ccOnPending').checked = s.ccOnPending;
+  $('#ccOnShipped').checked = s.ccOnShipped;
+
+  ['#notifyError', '#ccError', '#aeError', '#clearError'].forEach(function (sel) {
+    $(sel).classList.add('hidden');
+  });
+
+  $('#aeList').innerHTML = s.aes.length
+    ? s.aes.map(aeRow).join('')
     : '<div class="empty">ยังไม่มีรายชื่อ AE — กด "เพิ่ม AE ใหม่" ด้านล่าง</div>';
 }
 
@@ -445,19 +464,103 @@ function settingsError(sel, msg) {
   el.classList.remove('hidden');
 }
 
-$('#saveNotifyBtn').addEventListener('click', async function () {
-  const btn = $('#saveNotifyBtn');
-  $('#notifyError').classList.add('hidden');
+/** อีเมลแจ้งเตือนกับอีเมล CC ใช้ขั้นตอนบันทึกเหมือนกัน ต่างแค่ key กับช่องที่อ่าน */
+async function saveEmailSetting(key, field, errSel, btnSel, okMsg) {
+  const btn = $(btnSel);
+  $(errSel).classList.add('hidden');
   btn.disabled = true;
   try {
-    const data = await api('setNotifyEmail', { email: $('#notifyEmail').value.trim() });
-    state.settings.notifyEmail = data.notifyEmail;
-    $('#notifyEmail').value = data.notifyEmail;
-    toast('บันทึกอีเมลแจ้งเตือนแล้ว');
+    const data = await api('setEmailSetting', { key: key, email: $(field).value.trim() });
+    $(field).value = data.value;
+    if (key === 'CC_EMAIL') state.settings.ccEmail = data.value;
+    else state.settings.notifyEmail = data.value;
+    toast(okMsg);
   } catch (ex) {
-    settingsError('#notifyError', ex.message);
+    settingsError(errSel, ex.message);
   } finally {
     btn.disabled = false;
+  }
+}
+
+$('#saveNotifyBtn').addEventListener('click', function () {
+  saveEmailSetting('NOTIFY_EMAIL', '#notifyEmail', '#notifyError',
+    '#saveNotifyBtn', 'บันทึกอีเมลแจ้งเตือนแล้ว');
+});
+
+$('#saveCcBtn').addEventListener('click', function () {
+  saveEmailSetting('CC_EMAIL', '#ccEmail', '#ccError',
+    '#saveCcBtn', 'บันทึกอีเมล CC แล้ว');
+});
+
+/** สวิตช์ CC — ยิงทันทีที่ติ๊ก ถ้าพลาดให้ดีดกลับสถานะเดิม */
+async function saveCcFlag(key, box) {
+  $('#ccError').classList.add('hidden');
+  try {
+    await api('setFlagSetting', { key: key, on: box.checked });
+    if (key === 'CC_ON_PENDING') state.settings.ccOnPending = box.checked;
+    else state.settings.ccOnShipped = box.checked;
+    toast(box.checked ? 'เปิด CC แล้ว' : 'ปิด CC แล้ว');
+  } catch (ex) {
+    box.checked = !box.checked;
+    settingsError('#ccError', ex.message);
+  }
+}
+
+$('#ccOnPending').addEventListener('change', function (e) {
+  saveCcFlag('CC_ON_PENDING', e.target);
+});
+$('#ccOnShipped').addEventListener('change', function (e) {
+  saveCcFlag('CC_ON_SHIPPED', e.target);
+});
+
+$('#checkQuotaBtn').addEventListener('click', async function () {
+  const btn = $('#checkQuotaBtn');
+  const out = $('#quotaResult');
+  btn.disabled = true;
+  out.className = 'quota-result';
+  out.textContent = 'กำลังตรวจ...';
+  try {
+    const data = await api('getMailQuota');
+    const n = Number(data.quota);
+    if (isNaN(n)) {
+      out.textContent = String(data.quota);
+      out.classList.add('low');
+    } else {
+      out.textContent = 'วันนี้ส่งได้อีก ' + n + ' ฉบับ';
+      out.classList.add(n > 40 ? 'ok' : n > 15 ? 'warn' : 'low');
+    }
+  } catch (ex) {
+    out.className = 'quota-result low';
+    out.textContent = ex.message;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+$('#clearHistoryBtn').addEventListener('click', async function () {
+  const code = $('#adminCode').value.trim();
+  $('#clearError').classList.add('hidden');
+  if (!code) return settingsError('#clearError', 'กรุณากรอกรหัสยืนยัน');
+
+  // ด่านที่สอง — บอกจำนวนงานที่จะหายจริงก่อนให้ยืนยัน
+  const warn = 'ยืนยันลบงานทั้งหมด ' + state.jobs.length + ' รายการ และบันทึก Log ทั้งหมด?\n\n' +
+    'กู้คืนจากในระบบไม่ได้ ต้องกู้จาก File → Version history ของ Google Sheet เท่านั้น';
+  if (!confirm(warn)) return;
+
+  const btn = $('#clearHistoryBtn');
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'กำลังลบ...';
+  try {
+    const data = await api('clearHistory', { code: code });
+    $('#adminCode').value = '';
+    toast('ล้างข้อมูลแล้ว — ลบงาน ' + data.deletedJobs + ' รายการ · รหัสถัดไป ' + data.nextId);
+    await loadJobs();
+  } catch (ex) {
+    settingsError('#clearError', ex.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = label;
   }
 });
 

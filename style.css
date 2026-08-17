@@ -331,6 +331,43 @@ input[type="checkbox"] {
   border-top: 1px solid var(--border);
 }
 
+/* ============ สวิตช์เปิด/ปิดในหน้าตั้งค่า ============ */
+.switch-group {
+  display: flex; flex-direction: column; gap: 13px;
+  margin-top: 18px; padding-top: 15px;
+  border-top: 1px solid var(--border);
+}
+.switch-row {
+  display: flex; align-items: flex-start; gap: 11px;
+  font-size: 14px; cursor: pointer;
+}
+.switch-row input[type="checkbox"] { flex-shrink: 0; margin-top: 2px; }
+.switch-row b { font-weight: 600; color: var(--ink); }
+.switch-row em {
+  display: block; font-style: normal;
+  font-size: 12.5px; color: var(--muted); line-height: 1.5;
+}
+
+/* ============ โควตาเมล ============ */
+.quota-line { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.quota-result { font-size: 14px; color: var(--muted); }
+.quota-result.ok   { color: var(--green); font-weight: 600; }
+.quota-result.warn { color: var(--amber); font-weight: 600; }
+.quota-result.low  { color: var(--red);   font-weight: 600; }
+
+/* ============ โซนอันตราย ============ */
+.danger-title { color: var(--red); border-bottom-color: #f0c4c0; }
+.danger-zone { background: #fffafa; border-color: #f0c4c0; }
+.danger-text {
+  font-size: 13px; color: var(--text); line-height: 1.85;
+  margin-bottom: 12px;
+}
+.danger-row {
+  display: grid; grid-template-columns: 1fr auto; gap: 10px;
+  margin-top: 16px; padding-top: 15px;
+  border-top: 1px solid #f0c4c0;
+}
+
 .sec-title {
   font-size: 15px; font-weight: 600; color: var(--blue);
   display: flex; align-items: center; gap: 9px; flex-wrap: wrap;

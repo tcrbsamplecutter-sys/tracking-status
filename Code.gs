@@ -55,18 +55,33 @@ function setup() {
   if (!props.getProperty('SECRET')) {
     props.setProperty('SECRET', Utilities.getUuid() + Utilities.getUuid());
   }
-  if (!props.getProperty('NOTIFY_EMAIL')) {
-    props.setProperty('NOTIFY_EMAIL', 'nawinsan@scg.com');
-  }
+
+  // ค่าตั้งต้นของสิ่งที่แก้ได้จากหน้าตั้งค่าบนเว็บ
+  // เติมเฉพาะตัวที่ยังไม่มี จึงรัน setup() ซ้ำได้โดยไม่ทับค่าที่ผู้ใช้แก้ไว้แล้ว
+  const DEFAULTS = {
+    NOTIFY_EMAIL: 'nawinsan@scg.com',
+    CC_EMAIL: 'nawinscgp@gmail.com',
+    CC_ON_PENDING: 'yes',
+    CC_ON_SHIPPED: 'yes',
+    ADMIN_CODE: 'ADMINTCRB',
+  };
+  Object.keys(DEFAULTS).forEach(function (k) {
+    if (!props.getProperty(k)) props.setProperty(k, DEFAULTS[k]);
+  });
 
   const notes = [
     '',
     '===== สิ่งที่ต้องทำต่อ =====',
     '1) เปิดชีต "AEs" แล้วกรอกชื่อ AE กับอีเมลให้ครบ (คอลัมน์ active ใส่ yes)',
     '   ถ้าชีตนี้ว่าง ช่างตัดจะบันทึกงานไม่ได้ เพราะดรอปดาวน์ AE ไม่มีตัวเลือก',
-    '2) อีเมลที่รับแจ้งเตือน "รอส่ง" ตอนนี้คือ: ' + notifyEmail(),
-    '   แก้ได้ที่ Project Settings → Script Properties → NOTIFY_EMAIL (ไม่ต้อง Deploy ใหม่)',
-    '3) โควตาส่งเมลที่เหลือวันนี้: ' + mailQuota() + ' ฉบับ',
+    '2) การตั้งค่าทั้งหมดแก้ได้จากหน้าเว็บแล้ว — login เป็นช่างตัด แล้วเข้าเมนู "ตั้งค่า"',
+    '   · อีเมลแจ้งเตือน "รอส่ง" : ' + notifyEmail(),
+    '   · สำเนา CC              : ' + (ccEmail() || '(ไม่ได้ตั้ง)'),
+    '   · CC เมลรอส่ง / ส่งแล้ว : ' + ccFlag('PENDING') + ' / ' + ccFlag('SHIPPED'),
+    '3) รหัสยืนยันสำหรับล้างประวัติเก็บไว้ที่ Script Properties → ADMIN_CODE',
+    '   (จงใจไม่ฝังในโค้ด เพราะไฟล์ Code.gs ถูก push ขึ้น GitHub ที่เป็น Public)',
+    '4) โควตาส่งเมลที่เหลือวันนี้: ' + mailQuota() + ' ฉบับ',
+    '   ทุก CC หนึ่งคนกินโควตาเพิ่ม 1 ต่อเมลหนึ่งฉบับ',
   ];
 
   const users = sheet(CFG.USERS);
@@ -259,14 +274,19 @@ function findAeRow(name) {
 
 /**
  * แยกอีเมลที่คั่นด้วยจุลภาค ตรวจรูปแบบ แล้วคืนสตริงที่จัดรูปแล้ว
- * ใช้ร่วมกันทั้งอีเมลแจ้งเตือนและอีเมล AE จะได้ตรวจด้วยเกณฑ์เดียวกัน
+ * ใช้ร่วมกันทั้งอีเมลแจ้งเตือน อีเมล CC และอีเมล AE จะได้ตรวจด้วยเกณฑ์เดียวกัน
+ *
+ * allowEmpty = true ใช้กับ CC ซึ่งเว้นว่างได้ (แปลว่าไม่ต้องส่งสำเนา)
  */
-function parseEmails(text) {
+function parseEmails(text, allowEmpty) {
   const list = String(text || '').split(',')
     .map(function (s) { return s.trim(); })
     .filter(function (s) { return s !== ''; });
 
-  if (!list.length) throw new Error('กรุณากรอกอีเมล');
+  if (!list.length) {
+    if (allowEmpty) return '';
+    throw new Error('กรุณากรอกอีเมล');
+  }
 
   const re = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   list.forEach(function (e) {
@@ -283,6 +303,38 @@ function notifyEmail() {
   return PropertiesService.getScriptProperties().getProperty('NOTIFY_EMAIL') || '';
 }
 
+function ccEmail() {
+  return PropertiesService.getScriptProperties().getProperty('CC_EMAIL') || '';
+}
+
+/** สวิตช์ CC ของเมลชนิดนั้นเป็น 'yes' หรือ 'no' (ไม่เคยตั้ง = เปิด) */
+function ccFlag(kind) {
+  const v = PropertiesService.getScriptProperties().getProperty('CC_ON_' + kind);
+  return String(v || 'yes').toLowerCase() === 'no' ? 'no' : 'yes';
+}
+
+/**
+ * ที่อยู่ CC ที่จะใช้กับเมลชนิดนั้น — คืนค่าว่างถ้าสวิตช์ปิดอยู่
+ * kind = 'PENDING' (เมลแจ้งฝ่ายจัดส่ง) | 'SHIPPED' (เมลแจ้ง AE)
+ */
+function ccFor(kind) {
+  return ccFlag(kind) === 'no' ? '' : ccEmail();
+}
+
+/**
+ * รหัสยืนยันสำหรับล้างประวัติ
+ * โยน error เมื่อยังไม่ได้ตั้งค่า ไม่คืนค่าว่าง — ถ้าคืนว่างแล้วเผลอเทียบกับค่าว่าง
+ * จะกลายเป็นล้างข้อมูลได้โดยไม่ต้องกรอกรหัส
+ * และห้ามใส่ค่า fallback ในโค้ด เพราะไฟล์นี้ถูก push ขึ้น GitHub ที่เป็น Public
+ */
+function adminCode() {
+  const code = PropertiesService.getScriptProperties().getProperty('ADMIN_CODE');
+  if (!code) {
+    throw new Error('ยังไม่ได้ตั้งรหัสยืนยัน — ให้ผู้ดูแลรัน setup() ใน Apps Script หนึ่งครั้ง');
+  }
+  return code;
+}
+
 function mailQuota() {
   try {
     return MailApp.getRemainingDailyQuota();
@@ -291,14 +343,19 @@ function mailQuota() {
   }
 }
 
-/** ส่งเมลแบบไม่ให้ความล้มเหลวลามไปทำให้งานหลักพัง — แนวเดียวกับ writeLog() */
-function sendMailSafe(to, subject, body) {
+/**
+ * ส่งเมลแบบไม่ให้ความล้มเหลวลามไปทำให้งานหลักพัง — แนวเดียวกับ writeLog()
+ * ผู้เรียกเป็นคนตัดสินใจว่าจะแนบ cc ไหม ฟังก์ชันนี้ไม่ต้องรู้ว่าตัวเองเป็นเมลชนิดไหน
+ */
+function sendMailSafe(to, subject, body, cc) {
   if (!to) return;
   try {
-    MailApp.sendEmail({
+    const opts = {
       to: to, subject: subject, body: body,
       name: 'ระบบงานตัดกล่องตัวอย่าง',
-    });
+    };
+    if (cc) opts.cc = cc;
+    MailApp.sendEmail(opts);
   } catch (err) {
     writeLog('system', 'ส่งเมลไม่สำเร็จ', '', to + ' — ' + String(err.message || err));
   }
@@ -338,7 +395,7 @@ function notifyPendingShip(job) {
     'เปิดดูรายการทั้งหมด: ' + CFG.WEB_URL,
   ].join('\n');
 
-  sendMailSafe(notifyEmail(), '[รอส่ง] ' + job.id + ' ' + job.customer, body);
+  sendMailSafe(notifyEmail(), '[รอส่ง] ' + job.id + ' ' + job.customer, body, ccFor('PENDING'));
 }
 
 /** แจ้ง AE ว่างานของตัวเองส่งออกแล้ว */
@@ -360,7 +417,7 @@ function notifyShipped(job) {
     'เปิดดูรายการทั้งหมด: ' + CFG.WEB_URL,
   ].join('\n');
 
-  sendMailSafe(job.aeEmail, '[ส่งแล้ว] ' + job.id + ' ' + job.customer, body);
+  sendMailSafe(job.aeEmail, '[ส่งแล้ว] ' + job.id + ' ' + job.customer, body, ccFor('SHIPPED'));
 }
 
 /* ============================================================
@@ -385,6 +442,21 @@ function doPost(e) {
   return ContentService.createTextOutput(JSON.stringify(out))
     .setMimeType(ContentService.MimeType.JSON);
 }
+
+/**
+ * รายการตั้งค่าที่หน้าเว็บแก้ได้ — เป็น whitelist ไม่ใช่แค่ความเรียบร้อย
+ * ถ้ารับ key อะไรก็ได้ คนที่ login เป็นช่างตัดจะเขียนทับ SECRET (กุญแจเซ็น token ทั้งระบบ)
+ * หรือ ADMIN_CODE (รหัสล้างข้อมูล) ได้ทันที
+ */
+const EMAIL_SETTINGS = {
+  NOTIFY_EMAIL: { label: 'อีเมลแจ้งเตือนงานรอส่ง', allowEmpty: false },
+  CC_EMAIL: { label: 'อีเมลสำเนา CC', allowEmpty: true },
+};
+
+const FLAG_SETTINGS = {
+  CC_ON_PENDING: 'CC เมลแจ้งรอส่ง',
+  CC_ON_SHIPPED: 'CC เมลแจ้งส่งแล้ว',
+};
 
 const HANDLERS = {
   login: function (req) {
@@ -541,20 +613,88 @@ const HANDLERS = {
   getSettings: function (req) {
     const user = requireUser(req);
     requireRole(user, [ROLE.CUTTER]);
-    return { notifyEmail: notifyEmail(), aes: allAes() };
+    return {
+      notifyEmail: notifyEmail(),
+      ccEmail: ccEmail(),
+      ccOnPending: ccFlag('PENDING') === 'yes',
+      ccOnShipped: ccFlag('SHIPPED') === 'yes',
+      aes: allAes(),
+    };
   },
 
-  setNotifyEmail: function (req) {
+  setEmailSetting: function (req) {
     const user = requireUser(req);
     requireRole(user, [ROLE.CUTTER]);
 
-    const next = parseEmails(req.email);
-    const prev = notifyEmail();
-    PropertiesService.getScriptProperties().setProperty('NOTIFY_EMAIL', next);
+    const conf = EMAIL_SETTINGS[req.key];
+    if (!conf) throw new Error('ไม่รู้จักการตั้งค่า: ' + req.key);
+
+    const props = PropertiesService.getScriptProperties();
+    const next = parseEmails(req.email, conf.allowEmpty);
+    const prev = props.getProperty(req.key) || '';
+    props.setProperty(req.key, next);
 
     // เปลี่ยนปลายทางอีเมล = เปลี่ยนทางเดินข้อมูลลูกค้า ต้องสาวกลับได้ว่าใครเปลี่ยน
-    writeLog(user.username, 'เปลี่ยนอีเมลแจ้งเตือน', '', (prev || '(ว่าง)') + ' → ' + next);
-    return { notifyEmail: next };
+    writeLog(user.username, 'เปลี่ยน' + conf.label, '',
+      (prev || '(ว่าง)') + ' → ' + (next || '(ว่าง)'));
+    return { key: req.key, value: next };
+  },
+
+  setFlagSetting: function (req) {
+    const user = requireUser(req);
+    requireRole(user, [ROLE.CUTTER]);
+
+    const label = FLAG_SETTINGS[req.key];
+    if (!label) throw new Error('ไม่รู้จักการตั้งค่า: ' + req.key);
+
+    const value = req.on ? 'yes' : 'no';
+    PropertiesService.getScriptProperties().setProperty(req.key, value);
+    writeLog(user.username, 'ตั้งค่า ' + label, '', value === 'yes' ? 'เปิด' : 'ปิด');
+    return { key: req.key, value: value };
+  },
+
+  getMailQuota: function (req) {
+    const user = requireUser(req);
+    requireRole(user, [ROLE.CUTTER]);
+    return { quota: mailQuota() };
+  },
+
+  /**
+   * ล้างงานและ Log ทั้งหมด — ต้องเป็นช่างตัดและกรอกรหัสยืนยันให้ถูก
+   * บัญชีผู้ใช้และรายชื่อ AE ไม่ถูกแตะต้อง
+   */
+  clearHistory: function (req) {
+    const user = requireUser(req);
+    requireRole(user, [ROLE.CUTTER]);
+    if (String(req.code || '') !== adminCode()) throw new Error('รหัสยืนยันไม่ถูกต้อง');
+
+    let jobRows = 0;
+    let logRows = 0;
+
+    const lock = LockService.getScriptLock();
+    lock.waitLock(15000);
+    try {
+      const jobs = sheet(CFG.JOBS);
+      jobRows = Math.max(jobs.getLastRow() - 1, 0);
+      if (jobRows > 0) jobs.deleteRows(2, jobRows);
+
+      const log = sheet(CFG.LOG);
+      logRows = Math.max(log.getLastRow() - 1, 0);
+      if (logRows > 0) log.deleteRows(2, logRows);
+    } finally {
+      lock.releaseLock();
+    }
+
+    // เขียน log หลังล้างเสร็จ ไม่ใช่ก่อน ไม่งั้นบรรทัดที่บอกว่าใครสั่งลบจะถูกลบไปด้วย
+    // จนไม่เหลือร่องรอยว่าข้อมูลหายเพราะใคร
+    writeLog(user.username, 'ล้างประวัติทั้งหมด', '',
+      'ลบงาน ' + jobRows + ' รายการ, log ' + logRows + ' บรรทัด');
+
+    return {
+      deletedJobs: jobRows,
+      deletedLogs: logRows,
+      nextId: nextJobId(sheet(CFG.JOBS)),
+    };
   },
 
   /** originalName ว่าง = เพิ่มใหม่ · มีค่า = แก้แถวเดิม (รองรับการเปลี่ยนชื่อ) */
@@ -792,9 +932,18 @@ function adminCheckMailSetup() {
   const aes = activeAes();
   const missing = aes.filter(function (a) { return !a.email; });
 
+  const ccPerJob = (ccFor('PENDING') ? 1 : 0) + (ccFor('SHIPPED') ? 1 : 0);
+
   const lines = [
     '===== ตรวจการตั้งค่าอีเมล =====',
     'ผู้รับแจ้งเตือน "รอส่ง" (NOTIFY_EMAIL): ' + (notifyEmail() || '⚠️ ยังไม่ได้ตั้งค่า'),
+    'สำเนา CC (CC_EMAIL): ' + (ccEmail() || '(ไม่ได้ตั้ง)'),
+    '  · CC เมลแจ้งรอส่ง  : ' + (ccFlag('PENDING') === 'yes' ? 'เปิด' : 'ปิด'),
+    '  · CC เมลแจ้งส่งแล้ว : ' + (ccFlag('SHIPPED') === 'yes' ? 'เปิด' : 'ปิด'),
+    'งานหนึ่งรายการกินโควตา ' + (2 + ccPerJob) + ' ฉบับ (เมลหลัก 2 + CC ' + ccPerJob + ')',
+    'รหัสยืนยันล้างประวัติ (ADMIN_CODE): ' +
+      (PropertiesService.getScriptProperties().getProperty('ADMIN_CODE')
+        ? 'ตั้งค่าแล้ว' : '⚠️ ยังไม่ได้ตั้ง — ปุ่มล้างข้อมูลบนเว็บจะใช้ไม่ได้'),
     'โควตาส่งเมลที่เหลือวันนี้: ' + mailQuota(),
     'จำนวน AE ที่ใช้งานได้: ' + aes.length + (aes.length ? '' : '  ⚠️ ชีต AEs ว่าง บันทึกงานไม่ได้'),
   ];

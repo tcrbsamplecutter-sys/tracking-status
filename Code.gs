@@ -3,19 +3,23 @@
  * วางไฟล์นี้ใน Google Apps Script ที่ผูกกับ Google Sheet
  *
  * ขั้นตอนใช้งานครั้งแรก: รันฟังก์ชัน setup() หนึ่งครั้ง แล้วดูรหัสผ่านใน Log
+ *
+ * หมายเหตุ: ไฟล์นี้ใช้ MailApp ส่งอีเมลแจ้งเตือน ถ้าเพิ่งวางโค้ดใหม่ทับของเก่า
+ * ต้องรันฟังก์ชันจากหน้า Editor หนึ่งครั้งเพื่อกด Allow ให้สิทธิ์ส่งเมลก่อน
  */
 
 const CFG = {
   JOBS: 'Jobs',
   USERS: 'Users',
+  AES: 'AEs',
   LOG: 'Log',
   TZ: 'Asia/Bangkok',
   TOKEN_TTL_H: 12,
+  WEB_URL: 'https://tcrbsamplecutter-sys.github.io/tracking-status/',
 };
 
 const STATUS = {
-  WAIT_CUT: 'รอตัด',
-  CUT_DONE: 'ตัดเสร็จ',
+  PENDING_SHIP: 'รอส่ง',
   SHIPPED: 'ส่งแล้ว',
   CANCELLED: 'ยกเลิก',
 };
@@ -23,13 +27,15 @@ const STATUS = {
 const ROLE = { CUTTER: 'cutter', SHIPPING: 'shipping', VIEWER: 'viewer' };
 
 const JOB_COLS = [
-  'id', 'customer', 'sales', 'jobName', 'qty', 'destination',
-  'contactName', 'contactPhone', 'dueDate', 'status', 'note',
-  'createdBy', 'createdAt', 'cutBy', 'cutAt',
-  'vehicle', 'shipBy', 'shipAt', 'updatedAt',
+  'id', 'customer', 'fileCode', 'rscTele', 'dieCut', 'accessory',
+  'flute', 'qty', 'aeName', 'aeEmail', 'dueDate', 'destination',
+  'status', 'note',
+  'contactName', 'contactPhone', 'vehicle',
+  'createdBy', 'createdAt', 'shipBy', 'shipAt', 'updatedAt',
 ];
 
 const USER_COLS = ['username', 'name', 'role', 'salt', 'hash', 'active'];
+const AE_COLS = ['name', 'email', 'active'];
 const LOG_COLS = ['time', 'username', 'action', 'jobId', 'detail'];
 
 /* ============================================================
@@ -42,16 +48,30 @@ function setup() {
 
   ensureSheet(CFG.JOBS, JOB_COLS);
   ensureSheet(CFG.USERS, USER_COLS);
+  ensureSheet(CFG.AES, AE_COLS);
   ensureSheet(CFG.LOG, LOG_COLS);
 
   const props = PropertiesService.getScriptProperties();
   if (!props.getProperty('SECRET')) {
     props.setProperty('SECRET', Utilities.getUuid() + Utilities.getUuid());
   }
+  if (!props.getProperty('NOTIFY_EMAIL')) {
+    props.setProperty('NOTIFY_EMAIL', 'nawinsan@scg.com');
+  }
+
+  const notes = [
+    '',
+    '===== สิ่งที่ต้องทำต่อ =====',
+    '1) เปิดชีต "AEs" แล้วกรอกชื่อ AE กับอีเมลให้ครบ (คอลัมน์ active ใส่ yes)',
+    '   ถ้าชีตนี้ว่าง ช่างตัดจะบันทึกงานไม่ได้ เพราะดรอปดาวน์ AE ไม่มีตัวเลือก',
+    '2) อีเมลที่รับแจ้งเตือน "รอส่ง" ตอนนี้คือ: ' + notifyEmail(),
+    '   แก้ได้ที่ Project Settings → Script Properties → NOTIFY_EMAIL (ไม่ต้อง Deploy ใหม่)',
+    '3) โควตาส่งเมลที่เหลือวันนี้: ' + mailQuota() + ' ฉบับ',
+  ];
 
   const users = sheet(CFG.USERS);
   if (users.getLastRow() > 1) {
-    Logger.log('มีผู้ใช้อยู่แล้ว ข้ามการสร้างบัญชีเริ่มต้น');
+    Logger.log(['มีผู้ใช้อยู่แล้ว ข้ามการสร้างบัญชีเริ่มต้น'].concat(notes).join('\n'));
     return;
   }
 
@@ -69,14 +89,31 @@ function setup() {
     users.appendRow([u[0], u[1], u[2], salt, hashPassword(pw, salt), 'yes']);
     lines.push(u[0] + '  /  ' + pw + '   (' + u[1] + ')');
   });
-  Logger.log(lines.join('\n'));
+  Logger.log(lines.concat(notes).join('\n'));
 }
 
+/**
+ * สร้างชีตถ้ายังไม่มี และเขียนหัวตารางใหม่เมื่อไม่ตรงกับโค้ด
+ * (จำเป็นเวลาปรับโครงคอลัมน์ เพราะกด Save แล้วรัน setup() ซ้ำต้องอัพเดตหัวตารางให้ด้วย)
+ */
 function ensureSheet(name, headers) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   let sh = ss.getSheetByName(name);
   if (!sh) sh = ss.insertSheet(name);
-  if (sh.getLastRow() === 0) {
+
+  const width = sh.getLastColumn();
+  const current = (sh.getLastRow() === 0 || width === 0) ? []
+    : sh.getRange(1, 1, 1, width).getValues()[0].map(function (v) { return String(v); });
+
+  const same = current.length === headers.length &&
+    headers.every(function (h, i) { return current[i] === h; });
+
+  if (!same) {
+    if (sh.getLastRow() > 1) {
+      Logger.log('⚠️ ชีต ' + name + ' มีข้อมูล ' + (sh.getLastRow() - 1) +
+        ' แถว แต่หัวตารางไม่ตรงกับโค้ด — เขียนหัวตารางใหม่แล้ว ' +
+        'กรุณาตรวจว่าข้อมูลเดิมยังอยู่ตรงคอลัมน์');
+    }
     sh.getRange(1, 1, 1, headers.length).setValues([headers])
       .setFontWeight('bold').setBackground('#f1f3f5');
     sh.setFrozenRows(1);
@@ -163,6 +200,128 @@ function requireRole(user, roles) {
 }
 
 /* ============================================================
+ * AE — อีเมลถูก resolve ที่ฝั่งนี้เท่านั้น ไม่รับค่าจากหน้าเว็บ
+ * เพื่อไม่ให้ยิงคำสั่งตรงแล้วสั่งส่งเมลไปที่อื่นได้ และกันอีเมลพิมพ์ผิด
+ * ========================================================== */
+
+function activeAes() {
+  return readSheet(CFG.AES, AE_COLS)
+    .filter(function (a) {
+      return String(a.name).trim() !== '' && String(a.active).toLowerCase() !== 'no';
+    })
+    .map(function (a) {
+      return { name: String(a.name).trim(), email: String(a.email).trim() };
+    });
+}
+
+function findAe(name) {
+  const target = String(name || '').trim();
+  if (!target) return null;
+  const list = activeAes();
+  for (let i = 0; i < list.length; i++) {
+    if (list[i].name === target) return list[i];
+  }
+  return null;
+}
+
+/** หา AE หรือโยน error ที่บอกสาเหตุชัดเจน */
+function requireAe(name) {
+  if (!String(name || '').trim()) throw new Error('กรุณาเลือก AE');
+  const ae = findAe(name);
+  if (!ae) throw new Error('ไม่พบ AE ชื่อ "' + name + '" ในชีต AEs');
+  if (!ae.email) throw new Error('AE "' + ae.name + '" ยังไม่มีอีเมลในชีต AEs');
+  return ae;
+}
+
+/* ============================================================
+ * อีเมลแจ้งเตือน
+ * ========================================================== */
+
+function notifyEmail() {
+  return PropertiesService.getScriptProperties().getProperty('NOTIFY_EMAIL') || '';
+}
+
+function mailQuota() {
+  try {
+    return MailApp.getRemainingDailyQuota();
+  } catch (err) {
+    return 'อ่านไม่ได้ (ยังไม่ได้ให้สิทธิ์ส่งเมล)';
+  }
+}
+
+/** ส่งเมลแบบไม่ให้ความล้มเหลวลามไปทำให้งานหลักพัง — แนวเดียวกับ writeLog() */
+function sendMailSafe(to, subject, body) {
+  if (!to) return;
+  try {
+    MailApp.sendEmail({
+      to: to, subject: subject, body: body,
+      name: 'ระบบงานตัดกล่องตัวอย่าง',
+    });
+  } catch (err) {
+    writeLog('system', 'ส่งเมลไม่สำเร็จ', '', to + ' — ' + String(err.message || err));
+  }
+}
+
+/** รายละเอียดงานแบบข้อความ ตัดบรรทัดที่ไม่มีค่าออก */
+function jobLines(job) {
+  return [
+    ['รหัสงาน', job.id],
+    ['ลูกค้า', job.customer],
+    ['รหัสไฟล์', job.fileCode],
+    ['RSC / Tele', job.rscTele],
+    ['DieCut', job.dieCut],
+    ['Accessory', job.accessory],
+    ['ลอน', job.flute],
+    ['จำนวน / ใบ', job.qty],
+    ['AE', job.aeName],
+    ['กำหนดส่ง', job.dueDate],
+    ['ปลายทาง', job.destination],
+    ['หมายเหตุ', job.note],
+  ].filter(function (r) {
+    return String(r[1] === undefined || r[1] === null ? '' : r[1]) !== '';
+  }).map(function (r) {
+    return r[0] + ': ' + r[1];
+  }).join('\n');
+}
+
+/** แจ้งฝ่ายจัดส่งว่ามีงานรอส่ง */
+function notifyPendingShip(job) {
+  const body = [
+    'มีงานตัดกล่องตัวอย่างรอจัดส่ง',
+    '',
+    jobLines(job),
+    '',
+    'บันทึกโดย: ' + job.createdBy + '  (' + job.createdAt + ')',
+    '',
+    'เปิดดูรายการทั้งหมด: ' + CFG.WEB_URL,
+  ].join('\n');
+
+  sendMailSafe(notifyEmail(), '[รอส่ง] ' + job.id + ' ' + job.customer, body);
+}
+
+/** แจ้ง AE ว่างานของตัวเองส่งออกแล้ว */
+function notifyShipped(job) {
+  const ship = [['ทะเบียนรถ', job.vehicle], ['ผู้ติดต่อ', job.contactName],
+                ['เบอร์ติดต่อ', job.contactPhone], ['ส่งโดย', job.shipBy],
+                ['เวลาส่ง', job.shipAt]]
+    .filter(function (r) { return String(r[1] || '') !== ''; })
+    .map(function (r) { return r[0] + ': ' + r[1]; }).join('\n');
+
+  const body = [
+    'งานตัดกล่องตัวอย่างที่คุณสั่งไว้ จัดส่งเรียบร้อยแล้ว',
+    '',
+    jobLines(job),
+    '',
+    '--- ข้อมูลการจัดส่ง ---',
+    ship,
+    '',
+    'เปิดดูรายการทั้งหมด: ' + CFG.WEB_URL,
+  ].join('\n');
+
+  sendMailSafe(job.aeEmail, '[ส่งแล้ว] ' + job.id + ' ' + job.customer, body);
+}
+
+/* ============================================================
  * Router
  * ========================================================== */
 
@@ -205,7 +364,11 @@ const HANDLERS = {
 
   listJobs: function (req) {
     requireUser(req);
-    return { jobs: readSheet(CFG.JOBS, JOB_COLS), today: today() };
+    return {
+      jobs: readSheet(CFG.JOBS, JOB_COLS),
+      aes: activeAes(),
+      today: today(),
+    };
   },
 
   createJob: function (req) {
@@ -215,35 +378,49 @@ const HANDLERS = {
     if (!j.customer) throw new Error('กรุณากรอกชื่อลูกค้า');
     if (!j.destination) throw new Error('กรุณากรอกสถานที่จัดส่ง');
 
+    // อีเมลมาจากชีต AEs เท่านั้น ค่า aeEmail ที่ส่งมาจากหน้าเว็บถูกทิ้งทั้งหมด
+    const ae = requireAe(j.aeName);
+
+    let row;
     const lock = LockService.getScriptLock();
     lock.waitLock(15000);
     try {
       const sh = sheet(CFG.JOBS);
       const now = nowStr();
-      const row = {
+      row = {
         id: nextJobId(sh),
         customer: j.customer,
-        sales: j.sales || '',
-        jobName: j.jobName || '',
+        fileCode: j.fileCode || '',
+        rscTele: j.rscTele || '',
+        dieCut: j.dieCut || '',
+        accessory: j.accessory || '',
+        flute: j.flute || '',
         qty: j.qty || '',
+        aeName: ae.name,
+        aeEmail: ae.email,
+        dueDate: j.dueDate || '',
         destination: j.destination,
-        // ผู้ติดต่อ/เบอร์โทร เป็นหน้าที่ของฝ่ายจัดส่ง ไม่รับค่าจากช่างตัด
+        // งานถูกบันทึกหลังตัดเสร็จแล้ว จึงเข้าสถานะรอส่งทันที
+        status: STATUS.PENDING_SHIP,
+        note: j.note || '',
+        // ผู้ติดต่อ/เบอร์โทร/ทะเบียนรถ เป็นหน้าที่ของฝ่ายจัดส่ง ไม่รับค่าจากช่างตัด
         contactName: '',
         contactPhone: '',
-        dueDate: j.dueDate || '',
-        status: STATUS.WAIT_CUT,
-        note: j.note || '',
+        vehicle: '',
         createdBy: user.name,
         createdAt: now,
-        cutBy: '', cutAt: '', vehicle: '', shipBy: '', shipAt: '',
+        shipBy: '', shipAt: '',
         updatedAt: now,
       };
       sh.appendRow(JOB_COLS.map(function (c) { return row[c]; }));
-      writeLog(user.username, 'สร้างงาน', row.id, row.customer);
-      return { job: row };
+      writeLog(user.username, 'บันทึกงาน', row.id, row.customer);
     } finally {
       lock.releaseLock();
     }
+
+    // ส่งเมลหลังปล่อย lock แล้ว เพราะ MailApp ใช้เวลาราว 1-2 วินาที
+    notifyPendingShip(row);
+    return { job: row };
   },
 
   updateJob: function (req) {
@@ -254,7 +431,8 @@ const HANDLERS = {
     // ช่างตัด = ข้อมูลงานและปลายทาง / จัดส่ง = ข้อมูลการขนส่ง
     // ผู้ติดต่อ เบอร์โทร และทะเบียนรถ เป็นของฝ่ายจัดส่งเท่านั้น
     const allowed = user.role === ROLE.CUTTER
-      ? ['customer', 'sales', 'jobName', 'qty', 'destination', 'dueDate', 'note']
+      ? ['customer', 'fileCode', 'rscTele', 'dieCut', 'accessory', 'flute',
+         'qty', 'aeName', 'dueDate', 'destination', 'note']
       : user.role === ROLE.SHIPPING
         ? ['destination', 'contactName', 'contactPhone', 'vehicle', 'note']
         : [];
@@ -264,6 +442,14 @@ const HANDLERS = {
     allowed.forEach(function (f) {
       if (j[f] !== undefined) patch[f] = j[f];
     });
+
+    // เปลี่ยน AE แล้วต้องไปหาอีเมลใหม่จากชีต AEs ไม่เชื่อค่าจากหน้าเว็บ
+    if (patch.aeName !== undefined && patch.aeName !== target.data.aeName) {
+      const ae = requireAe(patch.aeName);
+      patch.aeName = ae.name;
+      patch.aeEmail = ae.email;
+    }
+
     patch.updatedAt = nowStr();
     applyPatch(target, patch);
     writeLog(user.username, 'แก้ไขงาน', req.id, Object.keys(patch).join(','));
@@ -277,15 +463,11 @@ const HANDLERS = {
     const next = req.status;
     const now = nowStr();
     const patch = { status: next, updatedAt: now };
+    let mailAe = false;
 
-    if (next === STATUS.CUT_DONE) {
-      requireRole(user, [ROLE.CUTTER]);
-      if (current !== STATUS.WAIT_CUT) throw new Error('งานนี้ไม่ได้อยู่ในสถานะรอตัด');
-      patch.cutBy = user.name;
-      patch.cutAt = now;
-    } else if (next === STATUS.SHIPPED) {
+    if (next === STATUS.SHIPPED) {
       requireRole(user, [ROLE.SHIPPING]);
-      if (current !== STATUS.CUT_DONE) throw new Error('ต้องตัดเสร็จก่อนจึงจะส่งได้');
+      if (current !== STATUS.PENDING_SHIP) throw new Error('งานนี้ไม่ได้อยู่ในสถานะรอส่ง');
       const vehicle = req.vehicle || target.data.vehicle;
       if (!vehicle) throw new Error('กรุณาระบุรถที่ใช้จัดส่ง');
       patch.vehicle = vehicle;
@@ -293,9 +475,11 @@ const HANDLERS = {
       if (req.contactPhone) patch.contactPhone = req.contactPhone;
       patch.shipBy = user.name;
       patch.shipAt = now;
-    } else if (next === STATUS.WAIT_CUT) {
+      mailAe = true;
+    } else if (next === STATUS.PENDING_SHIP) {
+      // ใช้เปิดงานที่ยกเลิกไปแล้วกลับมา
       requireRole(user, [ROLE.CUTTER]);
-      patch.cutBy = ''; patch.cutAt = '';
+      patch.shipBy = ''; patch.shipAt = '';
     } else if (next === STATUS.CANCELLED) {
       requireRole(user, [ROLE.CUTTER]);
     } else {
@@ -304,7 +488,10 @@ const HANDLERS = {
 
     applyPatch(target, patch);
     writeLog(user.username, 'เปลี่ยนสถานะ → ' + next, req.id, '');
-    return { job: readJobRow(target.row) };
+
+    const job = readJobRow(target.row);
+    if (mailAe) notifyShipped(job);
+    return { job: job };
   },
 
   changePassword: function (req) {
@@ -430,7 +617,7 @@ function adminResetPassword() {
 
 /**
  * ล้างข้อมูลงานทั้งหมด เริ่มนับรหัสงานใหม่ตั้งแต่ 001
- * บัญชีผู้ใช้และรหัสผ่านไม่ถูกแตะต้อง
+ * บัญชีผู้ใช้ รายชื่อ AE และรหัสผ่านไม่ถูกแตะต้อง
  *
  * ⚠️ ลบแล้วกู้จากในระบบไม่ได้ — ถ้าจะกู้ต้องใช้ File → Version history ของ Google Sheet
  * วิธีใช้: เปลี่ยน CONFIRM เป็น true แล้วกด Run
@@ -477,4 +664,29 @@ function adminAddUser() {
   const salt = Utilities.getUuid();
   sheet(CFG.USERS).appendRow([username, name, role, salt, hashPassword(password, salt), 'yes']);
   Logger.log('สร้างผู้ใช้ ' + username + ' รหัสผ่าน: ' + password);
+}
+
+/**
+ * ตรวจว่าการตั้งค่าอีเมลพร้อมใช้งานไหม — รันได้ทุกเมื่อ ไม่แก้ข้อมูลอะไร
+ * ใช้เช็คหลังวางโค้ดใหม่ว่าให้สิทธิ์ MailApp แล้วและชีต AEs กรอกครบ
+ */
+function adminCheckMailSetup() {
+  const aes = activeAes();
+  const missing = aes.filter(function (a) { return !a.email; });
+
+  const lines = [
+    '===== ตรวจการตั้งค่าอีเมล =====',
+    'ผู้รับแจ้งเตือน "รอส่ง" (NOTIFY_EMAIL): ' + (notifyEmail() || '⚠️ ยังไม่ได้ตั้งค่า'),
+    'โควตาส่งเมลที่เหลือวันนี้: ' + mailQuota(),
+    'จำนวน AE ที่ใช้งานได้: ' + aes.length + (aes.length ? '' : '  ⚠️ ชีต AEs ว่าง บันทึกงานไม่ได้'),
+  ];
+
+  aes.forEach(function (a) {
+    lines.push('  · ' + a.name + '  →  ' + (a.email || '⚠️ ไม่มีอีเมล'));
+  });
+  if (missing.length) {
+    lines.push('⚠️ มี AE ' + missing.length + ' คนที่ไม่มีอีเมล จะบันทึกงานให้คนนั้นไม่ได้');
+  }
+
+  Logger.log(lines.join('\n'));
 }

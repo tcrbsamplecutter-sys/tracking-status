@@ -3,24 +3,15 @@
  * ========================================================== */
 
 const STATUS = {
-  WAIT: 'รอตัด',
-  CUT: 'ตัดเสร็จ',
+  PENDING: 'รอส่ง',
   SHIP: 'ส่งแล้ว',
   CANCEL: 'ยกเลิก',
 };
 
 const STATUS_CLASS = {
-  'รอตัด': 's-wait',
-  'ตัดเสร็จ': 's-cut',
+  'รอส่ง': 's-cut',
   'ส่งแล้ว': 's-ship',
   'ยกเลิก': 's-cancel',
-};
-
-const STATUS_LABEL = {
-  'รอตัด': 'รอตัด',
-  'ตัดเสร็จ': 'รอส่ง',
-  'ส่งแล้ว': 'ส่งแล้ว',
-  'ยกเลิก': 'ยกเลิก',
 };
 
 const ROLE_LABEL = { cutter: 'ช่างตัด', shipping: 'จัดส่ง', viewer: 'ดูอย่างเดียว' };
@@ -34,7 +25,8 @@ const VIEW_TITLE = { jobs: 'รายการงาน', summary: 'สรุป
  * (Apps Script ตรวจซ้ำอีกชั้น การซ่อนตรงนี้เป็นแค่เรื่องความสะดวก)
  */
 const EDITABLE = {
-  cutter: ['customer', 'sales', 'jobName', 'qty', 'destination', 'dueDate', 'note'],
+  cutter: ['customer', 'fileCode', 'rscTele', 'dieCut', 'accessory', 'flute',
+           'qty', 'aeName', 'dueDate', 'destination', 'note'],
   shipping: ['destination', 'contactName', 'contactPhone', 'vehicle', 'note'],
   viewer: [],
 };
@@ -43,6 +35,7 @@ const state = {
   token: localStorage.getItem('token') || '',
   user: JSON.parse(localStorage.getItem('user') || 'null'),
   jobs: [],
+  aes: [],
   today: '',
   filter: 'all',
   search: '',
@@ -110,6 +103,10 @@ function thaiDate(iso) {
   return parts[2] + '/' + parts[1] + '/' + (Number(parts[0]) + 543).toString().slice(-2);
 }
 
+function isToday(stamp) {
+  return String(stamp || '').slice(0, 10) === state.today;
+}
+
 function dueClass(job) {
   if (!job.dueDate || job.status === STATUS.SHIP || job.status === STATUS.CANCEL) return '';
   const due = String(job.dueDate).slice(0, 10);
@@ -121,7 +118,6 @@ function dueClass(job) {
 function can(action) {
   const role = state.user ? state.user.role : '';
   if (action === 'create') return role === 'cutter';
-  if (action === 'markCut') return role === 'cutter';
   if (action === 'markShip') return role === 'shipping';
   if (action === 'cancel') return role === 'cutter';
   return false;
@@ -163,6 +159,7 @@ function logout() {
   state.token = '';
   state.user = null;
   state.jobs = [];
+  state.aes = [];
   localStorage.removeItem('token');
   localStorage.removeItem('user');
   $('#appView').classList.add('hidden');
@@ -198,6 +195,7 @@ async function loadJobs() {
   try {
     const data = await api('listJobs');
     state.jobs = data.jobs;
+    state.aes = data.aes || [];
     state.today = data.today;
     render();
   } catch (ex) {
@@ -215,21 +213,21 @@ function renderStats() {
   const jobs = state.jobs;
   const count = function (fn) { return jobs.filter(fn).length; };
 
-  const waiting = count(function (j) { return j.status === STATUS.WAIT; });
-  const pendingShip = count(function (j) { return j.status === STATUS.CUT; });
+  const pendingShip = count(function (j) { return j.status === STATUS.PENDING; });
   const shippedToday = count(function (j) {
-    return j.status === STATUS.SHIP && String(j.shipAt).slice(0, 10) === state.today;
+    return j.status === STATUS.SHIP && isToday(j.shipAt);
   });
   const late = count(function (j) {
     return j.dueDate && String(j.dueDate).slice(0, 10) < state.today
       && j.status !== STATUS.SHIP && j.status !== STATUS.CANCEL;
   });
+  const loggedToday = count(function (j) { return isToday(j.createdAt); });
 
   $('#stats').innerHTML = [
-    { cls: 'amber', num: waiting, label: 'รอตัด' },
     { cls: 'blue', num: pendingShip, label: 'รอจัดส่ง' },
     { cls: 'green', num: shippedToday, label: 'ส่งแล้ววันนี้' },
     { cls: 'red', num: late, label: 'เลยกำหนด' },
+    { cls: 'amber', num: loggedToday, label: 'บันทึกวันนี้' },
   ].map(function (s) {
     return '<div class="stat ' + s.cls + '">' +
       '<div class="stat-num">' + s.num + '</div>' +
@@ -240,7 +238,7 @@ function renderStats() {
 function matchesFilter(job) {
   if (state.filter !== 'all' && job.status !== state.filter) return false;
   if (!state.search) return true;
-  const hay = [job.id, job.customer, job.sales, job.jobName, job.destination,
+  const hay = [job.id, job.customer, job.fileCode, job.aeName, job.destination,
                job.contactName, job.vehicle].join(' ').toLowerCase();
   return hay.indexOf(state.search) !== -1;
 }
@@ -249,9 +247,16 @@ function jobCard(job, compact) {
   const cls = STATUS_CLASS[job.status] || 's-cancel';
   const bits = [];
 
-  if (job.jobName) bits.push('<span>งาน: <b>' + esc(job.jobName) + '</b></span>');
+  if (job.fileCode) bits.push('<span>รหัสไฟล์: <b>' + esc(job.fileCode) + '</b></span>');
+  if (job.flute) bits.push('<span>ลอน: <b>' + esc(job.flute) + '</b></span>');
   if (job.qty) bits.push('<span>จำนวน: <b>' + esc(job.qty) + '</b></span>');
-  if (job.sales) bits.push('<span>Sales: <b>' + esc(job.sales) + '</b></span>');
+
+  const counts = [['RSC', job.rscTele], ['DieCut', job.dieCut], ['Acc', job.accessory]]
+    .filter(function (c) { return String(c[1] || '') !== ''; })
+    .map(function (c) { return c[0] + ' ' + esc(c[1]); });
+  if (counts.length) bits.push('<span>' + counts.join(' · ') + '</span>');
+
+  if (job.aeName) bits.push('<span>AE: <b>' + esc(job.aeName) + '</b></span>');
   if (!compact && job.destination) {
     bits.push('<span>ส่งที่: <b>' + esc(job.destination) + '</b></span>');
   }
@@ -268,7 +273,7 @@ function jobCard(job, compact) {
       '<div class="job-customer">' + esc(job.customer) + '</div>' +
       '<div class="job-id">' + esc(job.id) + '</div>' +
     '</div>' +
-    '<span class="badge ' + cls + '">' + (STATUS_LABEL[job.status] || job.status) + '</span>' +
+    '<span class="badge ' + cls + '">' + esc(job.status) + '</span>' +
     '</div>' +
     '<div class="job-meta">' + bits.join('') + '</div></div>';
 }
@@ -289,21 +294,37 @@ function renderSummary() {
   };
 
   fill('#pendingShipList',
-    state.jobs.filter(function (j) { return j.status === STATUS.CUT; }),
+    state.jobs.filter(function (j) { return j.status === STATUS.PENDING; }),
     'ไม่มีงานค้างรอส่ง');
 
   fill('#cutTodayList',
-    state.jobs.filter(function (j) { return String(j.cutAt).slice(0, 10) === state.today; }),
-    'วันนี้ยังไม่มีงานที่ตัดเสร็จ');
+    state.jobs.filter(function (j) { return isToday(j.createdAt); }),
+    'วันนี้ยังไม่มีงานที่บันทึก');
 
   fill('#shipTodayList',
-    state.jobs.filter(function (j) { return String(j.shipAt).slice(0, 10) === state.today; }),
+    state.jobs.filter(function (j) { return isToday(j.shipAt); }),
     'วันนี้ยังไม่มีงานที่จัดส่ง');
 }
 
 /* ============================================================
  * Modal งาน
  * ========================================================== */
+
+/**
+ * เติมตัวเลือก AE จากชีต AEs
+ * ถ้า AE ของงานเดิมถูกปิดใช้งานไปแล้ว ยังต้องคงชื่อไว้ให้เห็นว่าเป็นใคร
+ */
+function fillAeOptions(selected) {
+  const list = state.aes.slice();
+  if (selected && !list.some(function (a) { return a.name === selected; })) {
+    list.push({ name: selected, email: '' });
+  }
+  $('#f_aeName').innerHTML = ['<option value="">— เลือก AE —</option>'].concat(
+    list.map(function (a) {
+      return '<option value="' + esc(a.name) + '">' + esc(a.name) + '</option>';
+    })
+  ).join('');
+}
 
 function openModal(job) {
   const form = $('#jobForm');
@@ -314,7 +335,10 @@ function openModal(job) {
   state.editingId = isNew ? null : job.id;
   form.reset();
   $('#modalError').classList.add('hidden');
-  $('#modalTitle').textContent = isNew ? 'สร้างงานใหม่' : 'รายละเอียดงาน';
+  $('#modalTitle').textContent = isNew ? 'บันทึกงานใหม่' : 'รายละเอียดงาน';
+
+  // ต้องเติม option ก่อนเซ็ตค่า ไม่งั้น select หาค่าที่จะเลือกไม่เจอ
+  fillAeOptions(isNew ? '' : job.aeName);
 
   Array.prototype.forEach.call(form.elements, function (el) {
     if (!el.name) return;
@@ -322,7 +346,7 @@ function openModal(job) {
     el.disabled = editable.indexOf(el.name) === -1;
   });
 
-  // ตอนสร้างงานใหม่ยังไม่มีข้อมูลจัดส่ง และช่างตัดก็ไม่มีสิทธิ์กรอก จึงซ่อนทั้งบล็อก
+  // ตอนบันทึกงานใหม่ยังไม่มีข้อมูลจัดส่ง และช่างตัดก็ไม่มีสิทธิ์กรอก จึงซ่อนทั้งบล็อก
   $('#shippingBlock').classList.toggle('hidden', isNew);
 
   const meta = $('#modalMeta');
@@ -330,12 +354,15 @@ function openModal(job) {
     meta.classList.add('hidden');
   } else {
     const lines = [
-      '<div>รหัสงาน <b>' + esc(job.id) + '</b> · สถานะ <b>' +
-        (STATUS_LABEL[job.status] || job.status) + '</b></div>',
-      '<div>สร้างโดย <b>' + esc(job.createdBy) + '</b> เมื่อ ' + esc(job.createdAt) + '</div>',
+      '<div>รหัสงาน <b>' + esc(job.id) + '</b> · สถานะ <b>' + esc(job.status) + '</b></div>',
+      '<div>บันทึกโดย <b>' + esc(job.createdBy) + '</b> เมื่อ ' + esc(job.createdAt) + '</div>',
     ];
-    if (job.cutAt) lines.push('<div>ตัดเสร็จโดย <b>' + esc(job.cutBy) + '</b> เมื่อ ' + esc(job.cutAt) + '</div>');
-    if (job.shipAt) lines.push('<div>จัดส่งโดย <b>' + esc(job.shipBy) + '</b> เมื่อ ' + esc(job.shipAt) + '</div>');
+    if (job.aeEmail) {
+      lines.push('<div>แจ้ง AE ที่ <b>' + esc(job.aeEmail) + '</b></div>');
+    }
+    if (job.shipAt) {
+      lines.push('<div>จัดส่งโดย <b>' + esc(job.shipBy) + '</b> เมื่อ ' + esc(job.shipAt) + '</div>');
+    }
     meta.innerHTML = lines.join('');
     meta.classList.remove('hidden');
   }
@@ -350,26 +377,20 @@ function renderModalActions(job) {
 
   if (!job) {
     buttons.push('<button class="btn" data-act="close">ยกเลิก</button>');
-    buttons.push('<button class="btn btn-primary" data-act="create">สร้างงาน</button>');
+    buttons.push('<button class="btn btn-primary" data-act="create">บันทึกงาน</button>');
   } else {
     buttons.push('<button class="btn" data-act="close">ปิด</button>');
 
-    if (job.status === STATUS.WAIT && can('cancel')) {
+    if (job.status === STATUS.PENDING && can('cancel')) {
       buttons.push('<button class="btn btn-danger" data-act="cancel">ยกเลิกงาน</button>');
     }
-    if (job.status === STATUS.CANCEL && can('markCut')) {
+    if (job.status === STATUS.CANCEL && can('cancel')) {
       buttons.push('<button class="btn" data-act="reopen">เปิดงานใหม่</button>');
-    }
-    if (job.status === STATUS.CUT && can('markCut')) {
-      buttons.push('<button class="btn" data-act="reopen">กลับไปรอตัด</button>');
     }
     if ((EDITABLE[role] || []).length) {
       buttons.push('<button class="btn" data-act="save">บันทึกการแก้ไข</button>');
     }
-    if (job.status === STATUS.WAIT && can('markCut')) {
-      buttons.push('<button class="btn btn-green" data-act="cut">ตัดเสร็จแล้ว</button>');
-    }
-    if (job.status === STATUS.CUT && can('markShip')) {
+    if (job.status === STATUS.PENDING && can('markShip')) {
       buttons.push('<button class="btn btn-green" data-act="ship">ส่งแล้ว</button>');
     }
   }
@@ -409,6 +430,8 @@ $('#modalActions').addEventListener('click', async function (e) {
   if (act === 'create' || act === 'save') {
     if (!job.customer) return modalError('กรุณากรอกชื่อลูกค้า');
     if (!job.destination) return modalError('กรุณากรอกสถานที่จัดส่ง');
+    // ช่างตัดต้องเลือก AE เพราะระบบใช้อีเมลของ AE ส่งแจ้งตอนจัดส่งเสร็จ
+    if (can('create') && !job.aeName) return modalError('กรุณาเลือก AE');
   }
   if (act === 'ship' && !job.vehicle) {
     return modalError('กรุณาระบุทะเบียนรถก่อนกดส่งแล้ว');
@@ -423,25 +446,22 @@ $('#modalActions').addEventListener('click', async function (e) {
   try {
     if (act === 'create') {
       await api('createJob', { job: job });
-      toast('สร้างงานเรียบร้อย');
+      toast('บันทึกงานเรียบร้อย ส่งเมลแจ้งฝ่ายจัดส่งแล้ว');
     } else if (act === 'save') {
       await api('updateJob', { id: state.editingId, job: job });
       toast('บันทึกเรียบร้อย');
-    } else if (act === 'cut') {
-      await api('setStatus', { id: state.editingId, status: STATUS.CUT });
-      toast('บันทึกว่าตัดเสร็จแล้ว');
     } else if (act === 'ship') {
       await api('setStatus', {
         id: state.editingId, status: STATUS.SHIP,
         vehicle: job.vehicle, contactName: job.contactName, contactPhone: job.contactPhone,
       });
-      toast('บันทึกว่าจัดส่งแล้ว');
+      toast('บันทึกว่าจัดส่งแล้ว ส่งเมลแจ้ง AE แล้ว');
     } else if (act === 'cancel') {
       await api('setStatus', { id: state.editingId, status: STATUS.CANCEL });
       toast('ยกเลิกงานแล้ว');
     } else if (act === 'reopen') {
-      await api('setStatus', { id: state.editingId, status: STATUS.WAIT });
-      toast('เปลี่ยนกลับเป็นรอตัดแล้ว');
+      await api('setStatus', { id: state.editingId, status: STATUS.PENDING });
+      toast('เปลี่ยนกลับเป็นรอส่งแล้ว');
     }
     closeModal();
     await loadJobs();
@@ -468,7 +488,13 @@ document.addEventListener('click', function (e) {
   }
 });
 
-$('#newJobBtn').addEventListener('click', function () { openModal(null); });
+$('#newJobBtn').addEventListener('click', function () {
+  if (!state.aes.length) {
+    toast('ยังไม่มีรายชื่อ AE ในระบบ — ให้ผู้ดูแลกรอกชีต AEs ก่อน', true);
+    return;
+  }
+  openModal(null);
+});
 $('#modalClose').addEventListener('click', closeModal);
 $('#modalBackdrop').addEventListener('click', function (e) {
   if (e.target === e.currentTarget) closeModal();

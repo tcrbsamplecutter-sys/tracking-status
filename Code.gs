@@ -19,6 +19,7 @@ const CFG = {
 };
 
 const STATUS = {
+  WAIT_HANDOVER: 'รอส่งมอบ',
   PENDING_SHIP: 'รอส่ง',
   SHIPPED: 'ส่งแล้ว',
   CANCELLED: 'ยกเลิก',
@@ -663,8 +664,8 @@ const HANDLERS = {
         aeEmail: ae.email,
         dueDate: j.dueDate || '',
         destination: j.destination,
-        // งานถูกบันทึกหลังตัดเสร็จแล้ว จึงเข้าสถานะรอส่งทันที
-        status: STATUS.PENDING_SHIP,
+        // บันทึกงานยังไม่ใช่การส่งมอบ ของยังอยู่ที่ช่างตัด จึงยังไม่แจ้งฝ่ายจัดส่ง
+        status: STATUS.WAIT_HANDOVER,
         note: j.note || '',
         // ผู้ติดต่อ/เบอร์โทร/ทะเบียนรถ เป็นหน้าที่ของฝ่ายจัดส่ง ไม่รับค่าจากช่างตัด
         contactName: '',
@@ -681,8 +682,7 @@ const HANDLERS = {
       lock.releaseLock();
     }
 
-    // ส่งเมลหลังปล่อย lock แล้ว เพราะ MailApp ใช้เวลาราว 1-2 วินาที
-    notifyPendingShip(row);
+    // ไม่ส่งเมลตรงนี้ — เมลแจ้งฝ่ายจัดส่งออกตอนช่างตัดกด "ส่งมอบแล้ว" ใน setStatus
     return { job: row };
   },
 
@@ -726,9 +726,16 @@ const HANDLERS = {
     const next = req.status;
     const now = nowStr();
     const patch = { status: next, updatedAt: now };
+    let mailPending = false;
     let mailAe = false;
 
-    if (next === STATUS.SHIPPED) {
+    if (next === STATUS.PENDING_SHIP) {
+      // ช่างตัดยืนยันว่านำของไปวางที่จุดส่งมอบแล้ว — จังหวะเดียวที่เมลแจ้งฝ่ายจัดส่งออก
+      requireRole(user, [ROLE.CUTTER]);
+      // กันกดซ้ำแล้วเมลออกหลายรอบ ไม่พึ่งการซ่อนปุ่มบนหน้าเว็บอย่างเดียว
+      if (current !== STATUS.WAIT_HANDOVER) throw new Error('งานนี้ไม่ได้อยู่ในสถานะรอส่งมอบ');
+      mailPending = true;
+    } else if (next === STATUS.SHIPPED) {
       requireRole(user, [ROLE.SHIPPING]);
       if (current !== STATUS.PENDING_SHIP) throw new Error('งานนี้ไม่ได้อยู่ในสถานะรอส่ง');
       const vehicle = req.vehicle || target.data.vehicle;
@@ -739,9 +746,11 @@ const HANDLERS = {
       patch.shipBy = user.name;
       patch.shipAt = now;
       mailAe = true;
-    } else if (next === STATUS.PENDING_SHIP) {
-      // ใช้เปิดงานที่ยกเลิกไปแล้วกลับมา
+    } else if (next === STATUS.WAIT_HANDOVER) {
+      // ใช้สองอย่าง — เปิดงานที่ยกเลิกกลับมา และดึงงานที่เผลอกดส่งมอบกลับมาแก้
       requireRole(user, [ROLE.CUTTER]);
+      // ของออกจากมือไปแล้ว ย้อนสถานะไม่ได้ทำให้ของกลับมา
+      if (current === STATUS.SHIPPED) throw new Error('งานที่ส่งแล้วย้อนกลับไม่ได้');
       patch.shipBy = ''; patch.shipAt = '';
     } else if (next === STATUS.CANCELLED) {
       requireRole(user, [ROLE.CUTTER]);
@@ -753,6 +762,7 @@ const HANDLERS = {
     writeLog(user.username, 'เปลี่ยนสถานะ → ' + next, req.id, '');
 
     const job = readJobRow(target.row);
+    if (mailPending) notifyPendingShip(job);
     if (mailAe) notifyShipped(job);
     return { job: job };
   },

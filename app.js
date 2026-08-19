@@ -3,12 +3,14 @@
  * ========================================================== */
 
 const STATUS = {
+  WAIT: 'รอส่งมอบ',
   PENDING: 'รอส่ง',
   SHIP: 'ส่งแล้ว',
   CANCEL: 'ยกเลิก',
 };
 
 const STATUS_CLASS = {
+  'รอส่งมอบ': 's-wait',
   'รอส่ง': 's-cut',
   'ส่งแล้ว': 's-ship',
   'ยกเลิก': 's-cancel',
@@ -127,6 +129,7 @@ function dueClass(job) {
 function can(action) {
   const role = state.user ? state.user.role : '';
   if (action === 'create') return role === 'cutter';
+  if (action === 'handover') return role === 'cutter';
   if (action === 'markShip') return role === 'shipping';
   if (action === 'cancel') return role === 'cutter';
   if (action === 'manage') return role === 'cutter';
@@ -241,6 +244,7 @@ function renderStats() {
   const jobs = state.jobs;
   const count = function (fn) { return jobs.filter(fn).length; };
 
+  const waitHandover = count(function (j) { return j.status === STATUS.WAIT; });
   const pendingShip = count(function (j) { return j.status === STATUS.PENDING; });
   const shippedToday = count(function (j) {
     return j.status === STATUS.SHIP && isToday(j.shipAt);
@@ -249,13 +253,12 @@ function renderStats() {
     return j.dueDate && String(j.dueDate).slice(0, 10) < state.today
       && j.status !== STATUS.SHIP && j.status !== STATUS.CANCEL;
   });
-  const loggedToday = count(function (j) { return isToday(j.createdAt); });
 
   $('#stats').innerHTML = [
+    { cls: 'amber', num: waitHandover, label: 'รอส่งมอบ' },
     { cls: 'blue', num: pendingShip, label: 'รอจัดส่ง' },
     { cls: 'green', num: shippedToday, label: 'ส่งแล้ววันนี้' },
     { cls: 'red', num: late, label: 'เลยกำหนด' },
-    { cls: 'amber', num: loggedToday, label: 'บันทึกวันนี้' },
   ].map(function (s) {
     return '<div class="stat ' + s.cls + '">' +
       '<div class="stat-num">' + s.num + '</div>' +
@@ -336,9 +339,10 @@ function groupByDay(jobs, basis) {
 }
 
 function dayCounts(jobs) {
-  const c = { pend: 0, ship: 0, cancel: 0 };
+  const c = { wait: 0, pend: 0, ship: 0, cancel: 0 };
   jobs.forEach(function (j) {
-    if (j.status === STATUS.PENDING) c.pend++;
+    if (j.status === STATUS.WAIT) c.wait++;
+    else if (j.status === STATUS.PENDING) c.pend++;
     else if (j.status === STATUS.SHIP) c.ship++;
     else if (j.status === STATUS.CANCEL) c.cancel++;
   });
@@ -357,6 +361,7 @@ function subBlock(title, cls, jobs) {
 function dayBlock(label, jobs, splitByStatus) {
   const c = dayCounts(jobs);
   const counts = [];
+  if (c.wait) counts.push('<span class="c-wait">● รอส่งมอบ ' + c.wait + '</span>');
   if (c.pend) counts.push('<span class="c-pend">● รอส่ง ' + c.pend + '</span>');
   if (c.ship) counts.push('<span class="c-ship">✓ ส่งแล้ว ' + c.ship + '</span>');
   if (c.cancel) counts.push('<span class="c-cancel">ยกเลิก ' + c.cancel + '</span>');
@@ -368,7 +373,8 @@ function dayBlock(label, jobs, splitByStatus) {
   // แยกรอส่ง/ส่งแล้วเฉพาะตอนที่กลุ่มนั้นปนกันจริง
   // โหมดยึดวันจัดส่ง ทุกงานในกลุ่มรายวันคือส่งแล้วทั้งหมด แยกไปก็ไม่ได้ความ
   const body = splitByStatus
-    ? subBlock('● รอส่ง', 'pend', byStatus(STATUS.PENDING)) +
+    ? subBlock('● รอส่งมอบ', 'wait', byStatus(STATUS.WAIT)) +
+      subBlock('● รอส่ง', 'pend', byStatus(STATUS.PENDING)) +
       subBlock('✓ ส่งแล้ว', 'ship', byStatus(STATUS.SHIP)) +
       subBlock('ยกเลิก', 'cancel', byStatus(STATUS.CANCEL))
     : '<div class="job-list compact">' +
@@ -704,14 +710,22 @@ function renderModalActions(job) {
   } else {
     buttons.push('<button class="btn" data-act="close">ปิด</button>');
 
-    if (job.status === STATUS.PENDING && can('cancel')) {
+    const open = job.status === STATUS.WAIT || job.status === STATUS.PENDING;
+    if (open && can('cancel')) {
       buttons.push('<button class="btn btn-danger" data-act="cancel">ยกเลิกงาน</button>');
     }
     if (job.status === STATUS.CANCEL && can('cancel')) {
       buttons.push('<button class="btn" data-act="reopen">เปิดงานใหม่</button>');
     }
+    // ทางถอยเวลาเผลอกดส่งมอบทั้งที่ยังไม่ได้เอาของไปวาง
+    if (job.status === STATUS.PENDING && can('handover')) {
+      buttons.push('<button class="btn" data-act="pullback">ดึงกลับไปรอส่งมอบ</button>');
+    }
     if ((EDITABLE[role] || []).length) {
       buttons.push('<button class="btn" data-act="save">บันทึกการแก้ไข</button>');
+    }
+    if (job.status === STATUS.WAIT && can('handover')) {
+      buttons.push('<button class="btn btn-green" data-act="handover">ส่งมอบแล้ว</button>');
     }
     if (job.status === STATUS.PENDING && can('markShip')) {
       buttons.push('<button class="btn btn-green" data-act="ship">ส่งแล้ว</button>');
@@ -826,6 +840,15 @@ $('#modalActions').addEventListener('click', async function (e) {
   }
   if (act === 'cancel' && !confirm('ยืนยันยกเลิกงานนี้?')) return;
 
+  // กดแล้วเมลออกทันทีและเรียกคืนไม่ได้ ต้องบอกให้ชัดก่อน
+  if (act === 'handover' && !confirm(
+      'ยืนยันว่านำงานนี้ไปวางที่จุดส่งมอบแล้ว?\n\n' +
+      'ระบบจะส่งเมลแจ้งฝ่ายจัดส่งทันที และเรียกเมลคืนไม่ได้')) return;
+
+  if (act === 'pullback' && !confirm(
+      'ดึงงานนี้กลับมาเป็นรอส่งมอบ?\n\n' +
+      'ฝ่ายจัดส่งได้รับเมลแจ้งไปแล้ว การดึงกลับไม่ได้ยกเลิกเมลฉบับนั้น')) return;
+
   const buttons = $$('#modalActions button');
   buttons.forEach(function (b) { b.disabled = true; });
   const originalText = btn.textContent;
@@ -838,6 +861,12 @@ $('#modalActions').addEventListener('click', async function (e) {
     } else if (act === 'save') {
       await api('updateJob', { id: state.editingId, job: job });
       toast('บันทึกเรียบร้อย');
+    } else if (act === 'handover') {
+      await api('setStatus', { id: state.editingId, status: STATUS.PENDING });
+      toast('บันทึกว่าส่งมอบแล้ว ส่งเมลแจ้งฝ่ายจัดส่งแล้ว');
+    } else if (act === 'pullback') {
+      await api('setStatus', { id: state.editingId, status: STATUS.WAIT });
+      toast('ดึงกลับเป็นรอส่งมอบแล้ว');
     } else if (act === 'ship') {
       await api('setStatus', {
         id: state.editingId, status: STATUS.SHIP,
@@ -848,8 +877,8 @@ $('#modalActions').addEventListener('click', async function (e) {
       await api('setStatus', { id: state.editingId, status: STATUS.CANCEL });
       toast('ยกเลิกงานแล้ว');
     } else if (act === 'reopen') {
-      await api('setStatus', { id: state.editingId, status: STATUS.PENDING });
-      toast('เปลี่ยนกลับเป็นรอส่งแล้ว');
+      await api('setStatus', { id: state.editingId, status: STATUS.WAIT });
+      toast('เปิดงานใหม่แล้ว สถานะกลับเป็นรอส่งมอบ');
     }
     closeModal();
     await loadJobs();

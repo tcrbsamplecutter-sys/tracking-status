@@ -285,6 +285,7 @@ input[type="checkbox"] {
   display: flex; gap: 14px; flex-wrap: wrap;
   margin-left: auto; font-size: 12.5px; font-weight: 600;
 }
+.c-wait   { color: var(--amber); }
 .c-pend   { color: var(--blue); }
 .c-ship   { color: var(--green); }
 .c-cancel { color: var(--gray); }
@@ -294,6 +295,7 @@ input[type="checkbox"] {
   display: flex; align-items: center; gap: 8px;
   font-size: 13.5px; font-weight: 600; margin-bottom: 9px;
 }
+.sub-title.wait   { color: var(--amber); }
 .sub-title.pend   { color: var(--blue); }
 .sub-title.ship   { color: var(--green); }
 .sub-title.cancel { color: var(--gray); }

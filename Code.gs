@@ -296,6 +296,143 @@ function parseEmails(text, allowEmpty) {
 }
 
 /* ============================================================
+ * ฐานข้อมูล Presales — อ่านอย่างเดียว ใช้ดึงข้อมูลมาเติมฟอร์มตอนบันทึกงาน
+ *
+ * ⚠️ รหัสเชื่อมต่อเก็บใน Script Properties เท่านั้น ห้ามมีค่าใดๆ อยู่ในไฟล์นี้
+ *    เพราะไฟล์นี้ถูก push ขึ้น GitHub ที่เป็น Public
+ * ========================================================== */
+
+const DB_KEYS = ['DB_SERVER', 'DB_PORT', 'DB_NAME', 'DB_USER', 'DB_PASSWORD'];
+
+/** อ่านค่าเชื่อมต่อ — ขาดตัวไหนบอกชื่อตัวนั้น ไม่เดาค่าแทน */
+function dbConfig() {
+  const props = PropertiesService.getScriptProperties();
+  const cfg = {};
+  const missing = [];
+  DB_KEYS.forEach(function (k) {
+    const v = props.getProperty(k);
+    if (!v) missing.push(k);
+    cfg[k] = v || '';
+  });
+  if (missing.length) {
+    throw new Error('ยังไม่ได้ตั้งค่าเชื่อมต่อฐานข้อมูล — ขาด ' + missing.join(', ') +
+      ' ใน Script Properties');
+  }
+  return cfg;
+}
+
+function dbUrl(cfg) {
+  return 'jdbc:sqlserver://' + cfg.DB_SERVER + ':' + cfg.DB_PORT +
+    ';databaseName=' + cfg.DB_NAME +
+    ';encrypt=true;trustServerCertificate=false;loginTimeout=30';
+}
+
+/** ใช้ ? เท่านั้น ห้ามต่อสตริงค่าจากหน้าเว็บเข้ามาใน SQL */
+const REQUEST_SQL = [
+  'SELECT TOP 1',
+  '  I.[c_customer_name], I.[pi_product_code], I.[pi_saletext1], I.[created_by]',
+  'FROM [dbo].[ps_request_approve_flow_detail] D',
+  'JOIN [dbo].[ps_request_approve_flow] F ON D.request_approve_flow_id = F.Id',
+  'JOIN [dbo].[ps_request] R ON F.request_id = R.Id',
+  'JOIN [dbo].[ps_items] I ON R.items_id = I.Id',
+  'JOIN [dbo].[ps_item_dimension] dim ON I.ps_dimension_id = dim.Id AND dim.active = 1',
+  'WHERE F.request_id = ? AND D.active = 1',
+  'ORDER BY R.request_approve_flow_id DESC',
+].join('\n');
+
+/** ตรวจ request_id ให้เป็นจำนวนเต็มบวกก่อนแตะฐานข้อมูล (ด่านแรกก่อน prepareStatement) */
+function cleanRequestId(v) {
+  const s = String(v === undefined || v === null ? '' : v).trim();
+  if (!/^[0-9]+$/.test(s)) throw new Error('request_id ต้องเป็นตัวเลขเท่านั้น');
+  const n = Number(s);
+  if (!n) throw new Error('request_id ต้องมากกว่า 0');
+  return n;
+}
+
+/** ค้นข้อมูลจากฐานข้อมูล — คืน null ถ้าไม่พบ */
+function queryRequest(requestId) {
+  const cfg = dbConfig();
+  let conn = null;
+  let stmt = null;
+  let rs = null;
+  try {
+    conn = Jdbc.getConnection(dbUrl(cfg), cfg.DB_USER, cfg.DB_PASSWORD);
+    stmt = conn.prepareStatement(REQUEST_SQL);
+    stmt.setInt(1, requestId);
+    rs = stmt.executeQuery();
+    if (!rs.next()) return null;
+    return {
+      customer: String(rs.getString(1) || '').trim(),
+      productCode: String(rs.getString(2) || '').trim(),
+      salesText: String(rs.getString(3) || '').trim(),
+      createdBy: String(rs.getString(4) || '').trim(),
+    };
+  } finally {
+    if (rs) { try { rs.close(); } catch (e) {} }
+    if (stmt) { try { stmt.close(); } catch (e) {} }
+    if (conn) { try { conn.close(); } catch (e) {} }
+  }
+}
+
+/** created_by → อีเมล SCG (เผื่อบางแถวเก็บเป็นอีเมลเต็มมาแล้ว จะได้ไม่ต่อซ้ำ) */
+function scgEmail(createdBy) {
+  const v = String(createdBy || '').trim();
+  if (!v) return '';
+  return v.indexOf('@') >= 0 ? v : v + '@scg.com';
+}
+
+/**
+ * เพิ่ม AE เข้าชีตถ้ายังไม่มี แล้วคืนชื่อ/อีเมลที่ใช้จริง
+ * ถ้ามีอยู่แล้วแต่ถูกปิดใช้งาน จะเปิดกลับให้ เพราะฐานข้อมูลยืนยันว่าคนนี้ยังสร้างงานอยู่จริง
+ * ถ้าไม่เปิดกลับ ช่างตัดจะเจอทางตัน — ฟอร์มเติมชื่อให้แล้วแต่กดบันทึกไม่ผ่าน
+ */
+function ensureAe(name, email, sourceNote, username) {
+  const clean = String(name || '').trim();
+  if (!clean || !email) return null;
+
+  const lock = LockService.getScriptLock();
+  lock.waitLock(15000);
+  try {
+    const sh = sheet(CFG.AES);
+    const row = findAeRow(clean);
+
+    if (!row) {
+      sh.appendRow([clean, email, 'yes']);
+      writeLog(username, 'เพิ่ม AE อัตโนมัติ', '', clean + ' / ' + email + ' — ' + sourceNote);
+      return { name: clean, email: email };
+    }
+
+    const cur = sh.getRange(row, 1, 1, AE_COLS.length).getValues()[0];
+    if (String(cur[2]).toLowerCase() === 'no') {
+      sh.getRange(row, AE_COLS.indexOf('active') + 1).setValue('yes');
+      writeLog(username, 'เปิดใช้งาน AE อัตโนมัติ', '', clean + ' — ' + sourceNote);
+    }
+    return { name: String(cur[0]).trim(), email: String(cur[1]).trim() || email };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/** แปลข้อความ error ของ JDBC เป็นสาเหตุที่พอจะลงมือแก้ได้ */
+function diagnoseDbError(msg) {
+  const m = String(msg || '').toLowerCase();
+
+  if (m.indexOf('login failed') >= 0 || m.indexOf('password') >= 0) {
+    return 'น่าจะเป็น: ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง — ตรวจ DB_USER / DB_PASSWORD';
+  }
+  if (m.indexOf('ssl') >= 0 || m.indexOf('tls') >= 0 || m.indexOf('encrypt') >= 0) {
+    return 'น่าจะเป็น: ไดรเวอร์เจรจา TLS กับ Azure ไม่ผ่าน\n' +
+      '  ⚠️ ข้อนี้แก้จากโค้ดไม่ได้ ต้องเปลี่ยนวิธี — ให้ Apps Script เรียก HTTPS ผ่านตัวกลางแทน JDBC';
+  }
+  return 'น่าจะเป็น: ไฟร์วอลล์ Azure ยังไม่อนุญาต IP ของ Google\n' +
+    '  เปิดช่วง IP เหล่านี้ที่ Azure SQL → Networking → Firewall rules\n' +
+    '  (Azure รับเป็นคู่ start-end ต้องแปลงจาก CIDR ก่อน)\n' +
+    '    64.18.0.0/20       64.233.160.0/19    66.102.0.0/20      66.249.80.0/20\n' +
+    '    72.14.192.0/18     74.125.0.0/16      173.194.0.0/16     207.126.144.0/20\n' +
+    '    209.85.128.0/17    216.58.192.0/19    216.239.32.0/19';
+}
+
+/* ============================================================
  * อีเมลแจ้งเตือน
  * ========================================================== */
 
@@ -606,6 +743,46 @@ const HANDLERS = {
     const job = readJobRow(target.row);
     if (mailAe) notifyShipped(job);
     return { job: job };
+  },
+
+  /**
+   * ดึงข้อมูลงานจากฐานข้อมูล Presales มาเติมฟอร์ม
+   * เป็นการอ่านข้อมูลลูกค้าจาก DB ของบริษัท จึงจำกัดเฉพาะช่างตัดและบันทึกทุกครั้ง
+   */
+  lookupRequest: function (req) {
+    const user = requireUser(req);
+    requireRole(user, [ROLE.CUTTER]);
+
+    const id = cleanRequestId(req.requestId);
+    const found = queryRequest(id);
+    if (!found) throw new Error('ไม่พบ request_id ' + id + ' ในระบบ Presales');
+
+    // อีเมล AE ประกอบฝั่งนี้เสมอ ไม่รับค่าจากหน้าเว็บ — กติกาเดียวกับที่ใช้กับชีต AEs
+    let ae = null;
+    const email = scgEmail(found.createdBy);
+    if (email) {
+      try {
+        parseEmails(email);   // ตรวจรูปแบบด้วยเกณฑ์เดียวกับที่อื่นในระบบ
+        ae = ensureAe(found.createdBy, email, 'จาก request ' + id, user.username);
+      } catch (err) {
+        // อีเมลใช้ไม่ได้ก็ยังคืนข้อมูลที่เหลือ ให้ช่างตัดเลือก AE เองแทนที่จะพังทั้งการดึง
+        ae = null;
+      }
+    }
+
+    writeLog(user.username, 'ดึงข้อมูล Presales', '',
+      'request_id ' + id + ' → ' + found.customer);
+
+    return {
+      requestId: id,
+      customer: found.customer,
+      productCode: found.productCode,
+      salesText: found.salesText,
+      createdBy: found.createdBy,
+      aeName: ae ? ae.name : '',
+      aeEmail: ae ? ae.email : '',
+      aes: activeAes(),
+    };
   },
 
   /* ---------- หน้าตั้งค่า — เฉพาะช่างตัด ---------- */
@@ -953,6 +1130,77 @@ function adminCheckMailSetup() {
   });
   if (missing.length) {
     lines.push('⚠️ มี AE ' + missing.length + ' คนที่ไม่มีอีเมล จะบันทึกงานให้คนนั้นไม่ได้');
+  }
+
+  Logger.log(lines.join('\n'));
+}
+
+/**
+ * ทดสอบเชื่อมต่อฐานข้อมูล Presales — ไม่แก้ข้อมูลอะไร รันได้ทุกเมื่อ
+ *
+ * ★ รันฟังก์ชันนี้ก่อนเป็นอันดับแรกหลังวางโค้ดใหม่ ★
+ * เพราะการต่อ Azure SQL ขึ้นกับไฟร์วอลล์และ TLS ซึ่งอยู่นอกโค้ด ยืนยันล่วงหน้าไม่ได้
+ * ถ้าต่อไม่ติดจะได้รู้ทันทีว่าติดตรงไหน แทนที่จะไปเจอตอนช่างตัดกดปุ่มจริง
+ */
+function adminTestDb() {
+  const TEST_REQUEST_ID = 754859;   // ← เปลี่ยนเป็น request_id ที่มีจริงเพื่อทดสอบ query
+
+  const lines = ['===== ทดสอบเชื่อมต่อฐานข้อมูล Presales ====='];
+
+  let cfg;
+  try {
+    cfg = dbConfig();
+  } catch (err) {
+    Logger.log(lines.concat([
+      '✗ ' + String(err.message || err),
+      '',
+      'ใส่ค่าที่ Apps Script → ⚙️ Project Settings → Script Properties',
+      'ต้องมีครบ 5 ตัว: ' + DB_KEYS.join(', '),
+      '',
+      '⚠️ ห้ามเอาค่าพวกนี้ไปใส่ในไฟล์ใดๆ ของโปรเจกต์ เพราะทุกไฟล์ถูก push ขึ้น repo สาธารณะ',
+    ]).join('\n'));
+    return;
+  }
+
+  lines.push('เซิร์ฟเวอร์ : ' + cfg.DB_SERVER + ':' + cfg.DB_PORT);
+  lines.push('ฐานข้อมูล  : ' + cfg.DB_NAME);
+  lines.push('ผู้ใช้      : ' + cfg.DB_USER);
+  lines.push('รหัสผ่าน   : ตั้งค่าแล้ว (' + cfg.DB_PASSWORD.length + ' ตัวอักษร)');
+  lines.push('');
+
+  const t0 = Date.now();
+  let conn = null;
+  try {
+    conn = Jdbc.getConnection(dbUrl(cfg), cfg.DB_USER, cfg.DB_PASSWORD);
+    lines.push('✓ ต่อสำเร็จ ใช้เวลา ' + (Date.now() - t0) + ' ms');
+  } catch (err) {
+    const msg = String(err.message || err);
+    lines.push('✗ ต่อไม่สำเร็จ หลังรอ ' + (Date.now() - t0) + ' ms');
+    lines.push('  ' + msg);
+    lines.push('');
+    lines.push(diagnoseDbError(msg));
+    Logger.log(lines.join('\n'));
+    return;
+  }
+
+  try {
+    conn.close();
+    const row = queryRequest(TEST_REQUEST_ID);
+    if (!row) {
+      lines.push('✓ query ทำงานได้ แต่ไม่พบ request_id ' + TEST_REQUEST_ID);
+      lines.push('  ลองเปลี่ยน TEST_REQUEST_ID ด้านบนเป็นเลขที่มีจริง');
+    } else {
+      lines.push('✓ ดึงข้อมูล request_id ' + TEST_REQUEST_ID + ' ได้');
+      lines.push('  ลูกค้า     : ' + row.customer);
+      lines.push('  P/C        : ' + row.productCode);
+      lines.push('  Sales Text : ' + row.salesText);
+      lines.push('  สร้างโดย   : ' + row.createdBy + '  →  ' + scgEmail(row.createdBy));
+      lines.push('');
+      lines.push('พร้อมใช้งานแล้ว — ช่างตัดกดปุ่ม "ดึงข้อมูล" ในฟอร์มบันทึกงานได้เลย');
+    }
+  } catch (err) {
+    lines.push('✗ ต่อได้แต่ query พัง: ' + String(err.message || err));
+    lines.push('  ตรวจว่าบัญชีนี้มีสิทธิ์อ่านตาราง ps_request / ps_items หรือไม่');
   }
 
   Logger.log(lines.join('\n'));

@@ -458,7 +458,8 @@ function renderSettings() {
     : '<div class="empty">ยังไม่มีรายชื่อ AE — กด "เพิ่ม AE ใหม่" ด้านล่าง</div>';
 }
 
-function settingsError(sel, msg) {
+/** แสดงข้อความผิดพลาดในกล่อง .alert ที่ระบุ — ใช้ร่วมทั้งหน้าตั้งค่าและบล็อกดึงข้อมูล */
+function showError(sel, msg) {
   const el = $(sel);
   el.textContent = msg;
   el.classList.remove('hidden');
@@ -476,7 +477,7 @@ async function saveEmailSetting(key, field, errSel, btnSel, okMsg) {
     else state.settings.notifyEmail = data.value;
     toast(okMsg);
   } catch (ex) {
-    settingsError(errSel, ex.message);
+    showError(errSel, ex.message);
   } finally {
     btn.disabled = false;
   }
@@ -502,7 +503,7 @@ async function saveCcFlag(key, box) {
     toast(box.checked ? 'เปิด CC แล้ว' : 'ปิด CC แล้ว');
   } catch (ex) {
     box.checked = !box.checked;
-    settingsError('#ccError', ex.message);
+    showError('#ccError', ex.message);
   }
 }
 
@@ -540,7 +541,7 @@ $('#checkQuotaBtn').addEventListener('click', async function () {
 $('#clearHistoryBtn').addEventListener('click', async function () {
   const code = $('#adminCode').value.trim();
   $('#clearError').classList.add('hidden');
-  if (!code) return settingsError('#clearError', 'กรุณากรอกรหัสยืนยัน');
+  if (!code) return showError('#clearError', 'กรุณากรอกรหัสยืนยัน');
 
   // ด่านที่สอง — บอกจำนวนงานที่จะหายจริงก่อนให้ยืนยัน
   const warn = 'ยืนยันลบงานทั้งหมด ' + state.jobs.length + ' รายการ และบันทึก Log ทั้งหมด?\n\n' +
@@ -557,7 +558,7 @@ $('#clearHistoryBtn').addEventListener('click', async function () {
     toast('ล้างข้อมูลแล้ว — ลบงาน ' + data.deletedJobs + ' รายการ · รหัสถัดไป ' + data.nextId);
     await loadJobs();
   } catch (ex) {
-    settingsError('#clearError', ex.message);
+    showError('#clearError', ex.message);
   } finally {
     btn.disabled = false;
     btn.textContent = label;
@@ -593,7 +594,7 @@ $('#aeList').addEventListener('click', async function (e) {
     renderSettings();
     toast('บันทึกรายชื่อ AE แล้ว');
   } catch (ex) {
-    settingsError('#aeError', ex.message);
+    showError('#aeError', ex.message);
     btn.disabled = false;
     btn.textContent = original;
   }
@@ -618,7 +619,7 @@ $('#aeList').addEventListener('change', async function (e) {
     toast(box.checked ? 'เปิดใช้งาน AE แล้ว' : 'ปิดใช้งาน AE แล้ว');
   } catch (ex) {
     box.checked = !box.checked;
-    settingsError('#aeError', ex.message);
+    showError('#aeError', ex.message);
   }
 });
 
@@ -664,6 +665,12 @@ function openModal(job) {
 
   // ตอนบันทึกงานใหม่ยังไม่มีข้อมูลจัดส่ง และช่างตัดก็ไม่มีสิทธิ์กรอก จึงซ่อนทั้งบล็อก
   $('#shippingBlock').classList.toggle('hidden', isNew);
+
+  // บล็อกดึงข้อมูลใช้เฉพาะตอนบันทึกงานใหม่ · ล้างทุกครั้งไม่ให้ค่าเก่าค้าง
+  $('#lookupBox').classList.toggle('hidden', !isNew || !can('create'));
+  $('#requestId').value = '';
+  $('#lookupOk').classList.add('hidden');
+  $('#lookupError').classList.add('hidden');
 
   const meta = $('#modalMeta');
   if (isNew) {
@@ -732,6 +739,71 @@ function modalError(msg) {
   el.textContent = msg;
   el.classList.remove('hidden');
 }
+
+/**
+ * ดึงข้อมูลจากระบบ Presales มาเติมฟอร์ม
+ * ล้มเหลวแล้วต้องไม่กระทบฟอร์ม — ช่างตัดกรอกเองต่อได้เสมอ
+ */
+async function lookupRequest() {
+  const btn = $('#lookupBtn');
+  const id = $('#requestId').value.trim();
+
+  $('#lookupOk').classList.add('hidden');
+  $('#lookupError').classList.add('hidden');
+  if (!id) return showError('#lookupError', 'กรุณากรอก request_id');
+
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'กำลังดึง...';
+
+  try {
+    const data = await api('lookupRequest', { requestId: id });
+
+    // อัพเดตรายชื่อ AE ก่อนเติม option ไม่งั้น select เลือกคนที่เพิ่งถูกเพิ่มไม่เจอ
+    if (data.aes) state.aes = data.aes;
+
+    const filled = [];
+
+    if (data.customer) {
+      $('#f_customer').value = data.customer;
+      filled.push('ลูกค้า <b>' + esc(data.customer) + '</b>');
+    }
+
+    const code = [data.productCode, data.salesText]
+      .filter(function (v) { return String(v || '').trim() !== ''; })
+      .join(' | ');
+    if (code) {
+      $('#f_fileCode').value = code;
+      filled.push('รหัสสินค้า <b>' + esc(code) + '</b>');
+    }
+
+    if (data.aeName) {
+      fillAeOptions(data.aeName);
+      $('#f_aeName').value = data.aeName;
+      filled.push('AE <b>' + esc(data.aeName) + '</b> · ' + esc(data.aeEmail));
+    }
+
+    const ok = $('#lookupOk');
+    ok.innerHTML = filled.length
+      ? 'เติมให้แล้ว — ' + filled.join('<br>') + '<br>ที่เหลือกรอกเองด้านล่าง'
+      : 'พบรายการนี้ แต่ไม่มีข้อมูลที่เติมได้ กรุณากรอกเอง';
+    ok.classList.remove('hidden');
+  } catch (ex) {
+    showError('#lookupError', ex.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = label;
+  }
+}
+
+$('#lookupBtn').addEventListener('click', lookupRequest);
+
+// กด Enter ในช่อง request_id ให้ดึงเลย ไม่ใช่ไปกดปุ่มบันทึกงาน
+$('#requestId').addEventListener('keydown', function (e) {
+  if (e.key !== 'Enter') return;
+  e.preventDefault();
+  lookupRequest();
+});
 
 $('#modalActions').addEventListener('click', async function (e) {
   const btn = e.target.closest('button[data-act]');

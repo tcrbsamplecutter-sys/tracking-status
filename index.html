@@ -267,12 +267,25 @@
     <form id="jobForm" class="modal-body">
       <div class="modal-meta hidden" id="modalMeta"></div>
 
+      <!-- ดึงข้อมูลจากระบบ Presales — โผล่เฉพาะตอนบันทึกงานใหม่ -->
+      <div class="lookup-box hidden" id="lookupBox">
+        <div class="lookup-head">ดึงจากระบบ Presales</div>
+        <div class="lookup-row">
+          <input type="text" id="requestId" inputmode="numeric" autocomplete="off"
+                 spellcheck="false" placeholder="request_id เช่น 754859">
+          <button type="button" class="btn btn-primary" id="lookupBtn">ดึงข้อมูล</button>
+        </div>
+        <div class="lookup-hint">หรือข้ามไปกรอกเองด้านล่างได้เลย</div>
+        <div id="lookupOk" class="lookup-ok hidden"></div>
+        <div id="lookupError" class="alert hidden"></div>
+      </div>
+
       <section class="fset">
         <h3 class="fset-title">ข้อมูลงาน</h3>
         <div class="frow"><label for="f_customer">ลูกค้า <b class="req">*</b></label>
           <input type="text" id="f_customer" name="customer" required></div>
-        <div class="frow"><label for="f_fileCode">รหัสไฟล์</label>
-          <input type="text" id="f_fileCode" name="fileCode" placeholder="00914-10913"></div>
+        <div class="frow"><label for="f_fileCode">รหัสสินค้า</label>
+          <input type="text" id="f_fileCode" name="fileCode" placeholder="P/C | Sales Text"></div>
         <div class="frow"><label for="f_rscTele">RSC / Tele</label>
           <input type="text" id="f_rscTele" name="rscTele" inputmode="numeric"></div>
         <div class="frow"><label for="f_dieCut">DieCut</label>

@@ -321,10 +321,16 @@ function dbConfig() {
   return cfg;
 }
 
+/**
+ * Apps Script รับ connection property ได้จำกัดมาก
+ * ใส่ encrypt / trustServerCertificate / loginTimeout เข้าไปจะถูกปฏิเสธตั้งแต่ยังไม่ทันต่อออกไป
+ * ("The following connection properties are unsupported: ...")
+ *
+ * ไม่ต้องสั่งเข้ารหัสเอง — Azure บังคับอยู่แล้ว และไดรเวอร์เจรจาให้ตอน handshake
+ */
 function dbUrl(cfg) {
   return 'jdbc:sqlserver://' + cfg.DB_SERVER + ':' + cfg.DB_PORT +
-    ';databaseName=' + cfg.DB_NAME +
-    ';encrypt=true;trustServerCertificate=false;loginTimeout=30';
+    ';databaseName=' + cfg.DB_NAME;
 }
 
 /** ใช้ ? เท่านั้น ห้ามต่อสตริงค่าจากหน้าเว็บเข้ามาใน SQL */
@@ -417,10 +423,16 @@ function ensureAe(name, email, sourceNote, username) {
 function diagnoseDbError(msg) {
   const m = String(msg || '').toLowerCase();
 
+  // ต้องเช็คก่อนเพื่อน เพราะข้อความมีคำว่า encrypt ปนอยู่ จะไปเข้าเงื่อนไข TLS ทั้งที่คนละเรื่อง
+  if (m.indexOf('unsupported') >= 0 && m.indexOf('connection propert') >= 0) {
+    return 'น่าจะเป็น: URL มี property ที่ Apps Script ไม่รองรับ\n' +
+      '  ไม่ใช่ปัญหาเครือข่าย — ถูกปฏิเสธตั้งแต่ยังไม่ทันต่อออกไป\n' +
+      '  เอา property ที่มันระบุออกจาก dbUrl() แล้วลองใหม่';
+  }
   if (m.indexOf('login failed') >= 0 || m.indexOf('password') >= 0) {
     return 'น่าจะเป็น: ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง — ตรวจ DB_USER / DB_PASSWORD';
   }
-  if (m.indexOf('ssl') >= 0 || m.indexOf('tls') >= 0 || m.indexOf('encrypt') >= 0) {
+  if (m.indexOf('ssl') >= 0 || m.indexOf('tls') >= 0 || m.indexOf('handshake') >= 0) {
     return 'น่าจะเป็น: ไดรเวอร์เจรจา TLS กับ Azure ไม่ผ่าน\n' +
       '  ⚠️ ข้อนี้แก้จากโค้ดไม่ได้ ต้องเปลี่ยนวิธี — ให้ Apps Script เรียก HTTPS ผ่านตัวกลางแทน JDBC';
   }
